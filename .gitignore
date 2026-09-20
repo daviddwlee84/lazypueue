@@ -36,3 +36,10 @@
 *.local
 .direnv/
 # <<< dev gitignore <<<
+
+# Go build and verification output
+/lazypueue
+/dist/
+/bin/
+/coverage.out
+__pycache__/

@@ -1,0 +1,54 @@
+# Preferences are separate from Pueue's own configuration.
+# Credential fields contain paths only. Never paste a shared secret here.
+default_connection = "all"
+
+[tui]
+refresh_seconds = 2
+background_seconds = 5
+
+[[connections]]
+id = "local"
+name = "Local"
+kind = "local"
+# binary = "/opt/homebrew/bin/pueue"
+# config_path = "/absolute/path/to/pueue.yml"
+
+[[connections]]
+id = "lab"
+name = "Lab over SSH"
+kind = "ssh"
+ssh_host = "lab-server" # An existing alias in ~/.ssh/config
+# binary = "/home/user/.cargo/bin/pueue"
+# config_path = "/home/user/.config/pueue/pueue.yml" # Remote path
+# profile = "batch"
+
+# Native connection through an existing local Pueue client configuration.
+# Uncomment the whole block after configuring Pueue's TLS or forwarded socket.
+# [[connections]]
+# id = "native-lab"
+# name = "Lab native"
+# kind = "native"
+# config_path = "/home/user/.config/pueue/remote.yml" # Local path
+# profile = "lab"
+# ssh_host = "lab-server" # Used only for new task submission
+# ssh_binary = "/home/user/.cargo/bin/pueue" # Companion's remote Pueue executable
+# ssh_config = "/home/user/.config/pueue/pueue.yml" # Companion's remote path
+# ssh_profile = "batch"
+
+# Alternative native TLS endpoint without an existing client config.
+# [[connections]]
+# id = "tls-lab"
+# kind = "native"
+# host = "lab.internal"
+# port = 6924
+# cert_path = "/home/user/.config/pueue/remote/daemon.cert"
+# secret_path = "/home/user/.config/pueue/remote/shared_secret"
+# ssh_host = "lab-server"
+
+# Alternative native connection through an already forwarded Unix socket.
+# [[connections]]
+# id = "socket-lab"
+# kind = "native"
+# socket_path = "/home/user/.config/pueue/remote.sock"
+# secret_path = "/home/user/.config/pueue/remote/shared_secret"
+# ssh_host = "lab-server"
