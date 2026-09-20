@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -70,6 +71,7 @@ type model struct {
 	path                                  string
 	backend                               core.Backend
 	states                                map[string]*connectionState
+	snapshotSequence                      uint64
 	sem                                   chan struct{}
 	scope, group                          string
 	tab, focus, sidebarIndex              int
@@ -102,7 +104,25 @@ type model struct {
 	previewGeneration                     uint64
 	previewCancel                         context.CancelFunc
 	previewPending                        bool
-	log                                   logState
+	log                                   *logState
+	infoTask                              *taskRow
+	sessions                              map[string]*logState
+	logPolls                              map[string]*logPollFlight
+	logPollSequence                       uint64
+	logSessionSequence                    uint64
+	watches                               []config.WatchState
+	monitor                               bool
+	monitorIndex                          int
+	monitorPage                           int
+	logSettingsKey                        string
+	mouse                                 bool
+	pressed                               *mousePress
+	editForm                              *form.EditModel
+	editConnection                        core.Connection
+	editSubmitting                        bool
+	upgrade                               *upgradeState
+	upgradeGeneration                     uint64
+	pagerSequence                         uint64
 	detailOffset                          int
 	prefix                                bool
 	prefixGen                             uint64
@@ -158,6 +178,13 @@ func newModel(ctx context.Context, cfg config.Config, path string, backend core.
 		m.states[c.ID] = &connectionState{}
 	}
 	m.views[m.viewKey()] = &viewState{}
+	m.sessions = map[string]*logState{}
+	m.logPolls = map[string]*logPollFlight{}
+	m.log = &logState{}
+	m.mouse = true
+	if cfg.TUI.Mouse != nil {
+		m.mouse = *cfg.TUI.Mouse
+	}
 	m.restoreScope = restoreScope
 	return m
 }
@@ -169,6 +196,18 @@ func (m *model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 func (m *model) close() {
+	if m.upgrade != nil && m.upgrade.Cancel != nil {
+		m.upgrade.Cancel()
+	}
+	for _, s := range m.sessions {
+		m.stopSession(s)
+	}
+	for _, flight := range m.logPolls {
+		flight.Cancel()
+	}
+	if m.editForm != nil {
+		m.editForm.Close()
+	}
 	if m.taskForm != nil {
 		m.taskForm.Close()
 	}
@@ -205,7 +244,8 @@ func (m *model) refresh(c core.Connection, force bool) tea.Cmd {
 	ctx, cancel := context.WithCancel(m.ctx)
 	s.Cancel = cancel
 	s.Pending = true
-	s.Generation++
+	m.snapshotSequence = max(m.snapshotSequence, s.Generation) + 1
+	s.Generation = m.snapshotSequence
 	s.Attempt = time.Now()
 	gen := s.Generation
 	return func() tea.Msg {
@@ -417,46 +457,14 @@ func (m *model) move(delta int) tea.Cmd {
 	return m.preview()
 }
 func (m *model) preview() tea.Cmd {
-	if m.log.Open {
-		return nil
-	}
-	r, ok := m.task()
-	if !ok {
-		m.previewText = ""
-		m.previewError = ""
+	if r, ok := m.task(); ok {
+		m.previewKey = r.key()
+	} else {
 		m.previewKey = ""
-		return nil
 	}
-	k := r.key()
-	if k == m.previewKey {
-		return nil
-	}
-	if m.previewCancel != nil {
-		m.previewCancel()
-	}
-	m.previewGeneration++
-	gen := m.previewGeneration
-	m.previewKey = k
-	m.previewText = ""
-	m.previewError = ""
-	m.previewPending = false
-	if r.Task.StartedAt == nil && !r.Task.Terminal() {
-		m.previewText = "This task has not started."
-		return nil
-	}
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.previewCancel = cancel
-	m.previewPending = true
-	return func() tea.Msg {
-		select {
-		case <-time.After(100 * time.Millisecond):
-		case <-ctx.Done():
-			return nil
-		}
-		s, e := m.backend.Log(ctx, r.Connection, r.Task.ID, 200)
-		return previewMsg{k, gen, s, e}
-	}
+	return m.syncLogs()
 }
+
 func (m *model) note(s string) {
 	m.status = s
 	m.events = append(m.events, time.Now().Format("15:04:05")+"  "+s)
@@ -466,17 +474,30 @@ func (m *model) note(s string) {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(tea.MouseMsg); ok && !m.mouse {
+		return m, nil
+	}
 	if _, ok := msg.(tea.KeyPressMsg); ok {
 		m.navigationTouched = true
+		m.pagerSequence++
+	}
+	if _, ok := msg.(tea.MouseClickMsg); ok {
+		m.pagerSequence++
 	}
 	var cmds []tea.Cmd
 	switch v := msg.(type) {
+	case upgradeCheckedMsg:
+		return m, m.acceptUpgradeCheck(v)
+	case upgradeAppliedMsg:
+		return m, m.acceptUpgradeApply(v)
 	case tea.WindowSizeMsg:
+		m.pressed = nil
 		m.width = max(1, v.Width)
 		m.height = max(1, v.Height)
 		m.input.SetWidth(max(1, m.width-8))
 	case tickMsg:
 		cmds = append(cmds, m.tick())
+		cmds = append(cmds, m.syncLogs())
 		active := m.cfg.TUI.RefreshSeconds
 		if active <= 0 {
 			active = 2
@@ -504,6 +525,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.Err = v.Err
 		if v.Err == nil {
 			s.Snapshot = v.Snapshot
+			m.updateSessionTasks(v.ID)
 			m.pruneSelection(v.ID)
 			if m.log.Open && m.log.Connection.ID == v.ID {
 				exists := false
@@ -532,6 +554,32 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case logChunkMsg:
 		return m, m.acceptLog(v)
+	case logPollMsg:
+		return m, m.acceptPoll(v)
+	case reportMsg:
+		if v.Err != nil {
+			m.note(v.Err.Error())
+			return m, nil
+		}
+		m.note("Copied failure report, including bounded output and task metadata.")
+		return m, tea.SetClipboard(v.Text)
+	case pagerReadyMsg:
+		if v.Sequence != m.pagerSequence || m.log.Key != v.Key || m.log.Attempt != v.Attempt {
+			return m, nil
+		}
+		if v.Err != nil {
+			m.note(v.Err.Error())
+			return m, nil
+		}
+		for _, s := range m.sessions {
+			m.stopSession(s)
+		}
+		return m, tea.Exec(&logPager{source: v.Command, pager: exec.Command("less", "-R")}, func(err error) tea.Msg { return pagerFinishedMsg{err} })
+	case pagerFinishedMsg:
+		if v.Err != nil {
+			m.note("Pager: " + v.Err.Error())
+		}
+		cmds = append(cmds, m.syncLogs())
 	case operationMsg:
 		if s := m.states[v.ID]; s != nil {
 			s.Writing = false
@@ -593,6 +641,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.taskForm = nil
 		}
 		m.formCancelRequested = false
+		if m.editSubmitting && m.editForm != nil && m.editConnection.ID == v.ID {
+			m.editSubmitting = false
+			if v.Err != nil {
+				m.formUnknown = v.Result.Unknown
+				cmds = append(cmds, m.editForm.Reject(v.Err))
+			} else {
+				m.editForm.Close()
+				m.editForm = nil
+				m.formUnknown = false
+			}
+		}
 	case addedSelectionMsg:
 		if m.scope == v.Connection && m.tab == 0 {
 			for _, r := range m.rows() {
@@ -619,6 +678,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.localState = v.State
 			if !m.navigationTouched {
+				m.watches = append([]config.WatchState(nil), v.State.Watches...)
+				if v.State.Mouse != nil {
+					m.mouse = *v.State.Mouse
+				}
 				for k, saved := range v.State.Views {
 					m.views[k] = &viewState{Selected: saved.Selected, Index: max(0, saved.Index), Offset: max(0, saved.Offset), Query: saved.Query, State: saved.State}
 				}
@@ -650,6 +713,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.connectionForm.Close()
 			}
 			m.connectionForm = nil
+			m.discardConnectionLogs(v.Connection.ID)
+			old, exists := m.connection(v.Connection.ID)
+			old.Name, old.Logs = v.Connection.Name, v.Connection.Logs
+			if v.Removed || (exists && old != v.Connection) {
+				watches := m.watches[:0]
+				for _, w := range m.watches {
+					if w.Connection != v.Connection.ID {
+						watches = append(watches, w)
+					}
+				}
+				m.watches = watches
+			}
 			m.cfg = v.Config
 			m.overlay = "connections"
 			m.menuIndex = 0
@@ -684,6 +759,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	// Forms own all input, including global mnemonic keys and Ctrl+C.
+	childMsg := msg
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		childMsg = tea.WindowSizeMsg{Width: size.Width, Height: max(1, size.Height-5)}
+	}
+	if _, ok := msg.(tea.MouseMsg); ok {
+		childMsg = translateMouse(msg, 0, 2)
+	}
+	if m.editForm != nil {
+		return m, m.updateEdit(childMsg, cmds)
+	}
 	if m.taskForm != nil {
 		if m.formPending {
 			if key, ok := msg.(tea.KeyPressMsg); ok && (key.String() == "ctrl+c" || key.String() == "esc") {
@@ -705,7 +790,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.formPending {
 			var cmd tea.Cmd
-			m.taskForm, cmd = m.taskForm.Update(msg)
+			m.taskForm, cmd = m.taskForm.Update(childMsg)
 			cmds = append(cmds, cmd)
 			if m.taskForm.Cancelled {
 				m.taskForm.Close()
@@ -739,7 +824,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.connectionForm != nil {
 		if !m.formPending {
 			var cmd tea.Cmd
-			m.connectionForm, cmd = m.connectionForm.Update(msg)
+			m.connectionForm, cmd = m.connectionForm.Update(childMsg)
 			cmds = append(cmds, cmd)
 			if m.connectionForm.Cancelled {
 				m.connectionForm.Close()
@@ -754,8 +839,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
+		m.pressed = nil
 		cmds = append(cmds, m.key(key))
 		return m, tea.Batch(cmds...)
+	}
+	if _, ok := msg.(tea.MouseMsg); ok {
+		return m, m.mouseEvent(msg)
 	}
 	if m.inputMode != "" || m.overlay == "actions" {
 		var cmd tea.Cmd
@@ -801,6 +890,9 @@ func (m *model) saveState() tea.Cmd {
 func (m *model) captureState() config.State {
 	s := m.localState
 	s.Scope = m.scope
+	s.Watches = append([]config.WatchState(nil), m.watches...)
+	mouse := m.mouse
+	s.Mouse = &mouse
 	s.Views = map[string]config.ViewState{}
 	for k, v := range m.views {
 		s.Views[k] = config.ViewState{Selected: v.Selected, Index: v.Index, Offset: v.Offset, Query: v.Query, State: v.State}
@@ -812,6 +904,19 @@ func (m *model) captureState() config.State {
 	return s
 }
 func (m *model) execute(c core.Connection, r core.Request, fromForm bool) tea.Cmd {
+	if m.backendMaintenanceActive() {
+		err := fmt.Errorf("backend maintenance is applying; wait before changing tasks on any connection")
+		m.formPending = false
+		m.editSubmitting = false
+		m.note(err.Error())
+		if fromForm && m.taskForm != nil {
+			return m.taskForm.Reject(err)
+		}
+		if m.editForm != nil {
+			return m.editForm.Reject(err)
+		}
+		return nil
+	}
 	s := m.states[c.ID]
 	if s == nil || s.Writing {
 		m.formPending = false
@@ -828,6 +933,11 @@ func (m *model) execute(c core.Connection, r core.Request, fromForm bool) tea.Cm
 	}
 }
 func (m *model) saveConnection(c core.Connection, removed bool) tea.Cmd {
+	if m.backendMaintenanceActive() {
+		return func() tea.Msg {
+			return connectionSavedMsg{Connection: c, Err: fmt.Errorf("wait for backend maintenance before changing connections")}
+		}
+	}
 	if s := m.states[c.ID]; s != nil && s.Writing {
 		return func() tea.Msg {
 			return connectionSavedMsg{Connection: c, Err: fmt.Errorf("wait for the operation on %s before changing its connection", c.DisplayName())}
@@ -869,6 +979,10 @@ func (m *model) saveConnection(c core.Connection, removed bool) tea.Cmd {
 	}
 }
 func (m *model) openTask(kind string) tea.Cmd {
+	if m.backendMaintenanceActive() {
+		m.note("Backend maintenance is applying; wait before submitting tasks on any connection.")
+		return nil
+	}
 	m.stopLog()
 	m.formUnknown = false
 	m.formCancelRequested = false
@@ -917,10 +1031,15 @@ func (m *model) openTask(kind string) tea.Cmd {
 	m.overlay = ""
 	m.inputMode = ""
 	m.taskForm = form.NewTask(m.cfg.Connections, a, cID, m.backend)
+	m.taskForm.Update(tea.WindowSizeMsg{Width: m.width, Height: max(1, m.height-5)})
 	m.formGuardConnection = cID
-	return m.taskForm.Init()
+	return tea.Batch(m.taskForm.Init(), m.syncLogs())
 }
 func (m *model) openConnection(edit bool) tea.Cmd {
+	if m.backendMaintenanceActive() {
+		m.note("Wait for backend maintenance before changing connections.")
+		return nil
+	}
 	c := core.Connection{Kind: "ssh"}
 	if edit {
 		idx := m.menuIndex - 1
@@ -935,9 +1054,10 @@ func (m *model) openConnection(edit bool) tea.Cmd {
 	}
 	m.connectionEditing = edit
 	m.connectionForm = form.NewConnection(c, edit, m.backend)
+	m.connectionForm.Update(tea.WindowSizeMsg{Width: m.width, Height: max(1, m.height-5)})
 	m.connectionForm.SavePath = m.path
 	m.overlay = ""
-	return m.connectionForm.Init()
+	return tea.Batch(m.connectionForm.Init(), m.syncLogs())
 }
 func clamp(x, lo, hi int) int {
 	if hi < lo {

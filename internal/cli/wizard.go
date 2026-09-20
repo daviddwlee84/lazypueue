@@ -19,16 +19,21 @@ type wizardResultMsg struct {
 }
 type wizardHost struct {
 	task                     *form.TaskModel
+	edit                     *form.EditModel
 	connection               *form.ConnectionModel
 	submit                   func() (core.Result, error)
 	cancel                   context.CancelFunc
 	width, height            int
+	mouse                    bool
 	pending, done, cancelled bool
 	result                   core.Result
 	finalErr                 error
 }
 
 func (m *wizardHost) Init() tea.Cmd {
+	if m.edit != nil {
+		return m.edit.Init()
+	}
 	if m.task != nil {
 		return m.task.Init()
 	}
@@ -36,7 +41,9 @@ func (m *wizardHost) Init() tea.Cmd {
 }
 func (m *wizardHost) View() tea.View {
 	text := ""
-	if m.task != nil {
+	if m.edit != nil {
+		text = m.edit.View(m.width, m.height)
+	} else if m.task != nil {
 		text = m.task.View(m.width, m.height)
 	} else {
 		text = m.connection.View(m.width, m.height)
@@ -46,9 +53,15 @@ func (m *wizardHost) View() tea.View {
 	}
 	v := tea.NewView(text)
 	v.AltScreen = true
+	if m.mouse {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
 }
 func (m *wizardHost) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(tea.MouseMsg); ok && !m.mouse {
+		return m, nil
+	}
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width, m.height = size.Width, size.Height
 	}
@@ -62,6 +75,9 @@ func (m *wizardHost) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if result.result.Unknown {
 				m.finalErr = failure
 				return m, tea.Quit
+			}
+			if m.edit != nil {
+				return m, m.edit.Reject(failure)
 			}
 			if m.task != nil {
 				return m, m.task.Reject(failure)
@@ -83,7 +99,10 @@ func (m *wizardHost) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	var command tea.Cmd
 	var done, cancelled bool
-	if m.task != nil {
+	if m.edit != nil {
+		m.edit, command = m.edit.Update(msg)
+		done, cancelled = m.edit.Done, m.edit.Cancelled
+	} else if m.task != nil {
 		m.task, command = m.task.Update(msg)
 		done, cancelled = m.task.Done, m.task.Cancelled
 	} else {
@@ -123,7 +142,7 @@ func (a *app) runTaskWizard(cmd *cobra.Command, cfg config.Config, model *form.T
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
 	defer model.Close()
-	host := &wizardHost{task: model, width: 80, height: 24, cancel: cancel}
+	host := &wizardHost{task: model, width: 80, height: 24, cancel: cancel, mouse: wizardMouse(cfg)}
 	host.submit = func() (core.Result, error) {
 		c, err := cfg.Connection(model.ConnectionID)
 		if err != nil {
@@ -141,7 +160,7 @@ func (a *app) runConnectionWizard(cmd *cobra.Command, cfg config.Config, path st
 	model := form.NewConnection(initial, editing, a.options.Backend)
 	model.SavePath = path
 	defer model.Close()
-	host := &wizardHost{connection: model, width: 80, height: 24, cancel: cancel}
+	host := &wizardHost{connection: model, width: 80, height: 24, cancel: cancel, mouse: wizardMouse(cfg)}
 	host.submit = func() (core.Result, error) {
 		next := cfg
 		next.Connections = append([]core.Connection(nil), cfg.Connections...)
@@ -155,4 +174,29 @@ func (a *app) runConnectionWizard(cmd *cobra.Command, cfg config.Config, path st
 	}
 	err := a.runWizard(cmd, host)
 	return model.Connection, err
+}
+
+func (a *app) runEditWizard(cmd *cobra.Command, c core.Connection, model *form.EditModel) (core.Result, error) {
+	ctx, cancel := context.WithCancel(cmd.Context())
+	defer cancel()
+	defer model.Close()
+	cfg, _, err := a.load()
+	if err != nil {
+		return core.Result{}, err
+	}
+	host := &wizardHost{edit: model, width: 80, height: 24, cancel: cancel, mouse: wizardMouse(cfg)}
+	host.submit = func() (core.Result, error) { return a.options.Backend.Execute(ctx, c, model.Request) }
+	err = a.runWizard(cmd, host)
+	return host.result, err
+}
+
+func wizardMouse(cfg config.Config) bool {
+	enabled := true
+	if cfg.TUI.Mouse != nil {
+		enabled = *cfg.TUI.Mouse
+	}
+	if state, err := config.LoadState(); err == nil && state.Mouse != nil {
+		enabled = *state.Mouse
+	}
+	return enabled
 }

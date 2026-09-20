@@ -26,6 +26,10 @@ func (m *model) actions() []action {
 	out := []action{{ID: "add", Label: "Add task", Key: "n"}}
 	if m.tab == 0 {
 		if r, ok := m.task(); ok {
+			out = append(out, action{ID: "monitor", Label: "Monitor selected tasks", Key: "W"}, action{ID: "edit-task", Label: "Edit / edit and restart", Key: "e"}, action{ID: "copy-failure", Label: "Copy failure report", Key: "Y"})
+			if r.Task.Locked {
+				out = append(out, action{ID: "recover-stash", Label: "Recover locked task to stash", Target: &pendingAction{Connection: r.Connection, Request: core.Request{Operation: "recover-stash", IDs: []int{r.Task.ID}, Guards: map[int]time.Time{r.Task.ID: r.Task.CreatedAt}}, Title: "Recover locked task", Consequence: "Restore this task to stashed without starting it."}})
+			}
 			out = append(out, action{ID: "log", Label: "Show log", Key: "enter"}, action{ID: "follow", Label: "Follow output", Key: "F"}, action{ID: "copy-id", Label: "Copy task ID", Value: strconv.Itoa(r.Task.ID)}, action{ID: "copy-command", Label: "Copy command", Value: r.Task.Command}, action{ID: "copy-add", Label: "Copy pueue add command"}, action{ID: "clone", Label: "Duplicate and edit"}, action{ID: "after", Label: "Add job after this", Key: "a"})
 			rows := m.actionRows()
 			ids := make([]int, 0, len(rows))
@@ -48,7 +52,7 @@ func (m *model) actions() []action {
 			}
 			if allTerminal {
 				add("restart", "Restart as new task", "R", "Create new tasks and preserve the original logs. Pueue clears dependencies on restarted copies.", false)
-				add("restart", "Restart in place (overwrite logs)", "", "Reuse the IDs and permanently overwrite their logs.", true)
+				add("restart", "Restart in place (overwrite logs)", "I", "Reuse the IDs and permanently overwrite their logs.", true)
 			}
 			if allRunning {
 				add("pause", "Pause", "p", "", false)
@@ -81,11 +85,13 @@ func (m *model) actions() []action {
 		add("group-start", "Resume group", "Resume this group's queue.")
 		out = append(out, action{ID: "parallel-input", Label: "Set group parallelism", Target: &pendingAction{Connection: g.Connection, Request: core.Request{Operation: "parallel", Group: g.Group.Name}, Title: "Set parallelism", Consequence: "Change the group's execution capacity. 0 means unlimited."}})
 		add("restart-failed", "Restart failed tasks in group", "Create new tasks for the failures; preserve original logs.")
+		add("clear-group", "Clear group (stop and remove reviewed tasks)", "Stop the reviewed running/paused tasks and remove reviewed tasks and logs. Keep this group; new submissions are not included.")
 		if g.Group.Name != "default" {
 			add("group-remove", "Remove empty group", "Remove this empty group. Pueue refuses to remove groups that still contain tasks.")
 		}
 	}
 	if c, ok := m.actionConnection(); ok {
+		out = append(out, action{ID: "upgrade-backend", Label: "Check / upgrade Pueue backend", Target: &pendingAction{Connection: c}})
 		out = append(out, action{ID: "group-input", Label: "Create group", Target: &pendingAction{Connection: c, Request: core.Request{Operation: "group-add", Parallel: 1}, Title: "Create group (parallelism 1)"}})
 		group := m.group
 		if g, ok := m.selectedGroup(); ok {
@@ -97,6 +103,7 @@ func (m *model) actions() []action {
 		}
 	}
 	out = append(out, action{ID: "status-filter", Label: "Filter by status", Key: "s"}, action{ID: "connections", Label: "Manage connections", Key: "t"}, action{ID: "refresh", Label: "Refresh", Key: "r"}, action{ID: "events", Label: "Recent operation results"}, action{ID: "help", Label: "Help", Key: "?"})
+	out = append(out, action{ID: "upgrade-self", Label: "Check / upgrade lazypueue"})
 	return out
 }
 func (m *model) actionConnection() (core.Connection, bool) {
@@ -164,6 +171,23 @@ func (m *model) key(k tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.log.Open {
 		return m.logKey(k)
+	}
+	if m.monitor {
+		return m.monitorKey(k)
+	}
+	if key == "0" || key == "1" || key == "2" || key == "3" || key == "4" {
+		return m.directPane(key)
+	}
+	if key == "m" {
+		m.mouse = !m.mouse
+		m.pressed = nil
+		return nil
+	}
+	if m.focus == 2 && m.tab == 0 {
+		switch key {
+		case "up", "down", "j", "k", "pgup", "pgdown", "ctrl+u", "ctrl+d", "ctrl+b", "ctrl+f", "home", "end", "G", "f", "F", "/", "y", "Y", "L", " ", "space", "r", "o", "i":
+			return m.logKey(k)
+		}
 	}
 	if key == "ctrl+c" || key == "q" {
 		return tea.Quit
@@ -283,6 +307,19 @@ func (m *model) inputKey(k tea.KeyPressMsg) tea.Cmd {
 			m.findLog(1)
 			return nil
 		}
+		if mode == "log-interval" {
+			s := m.sessions[m.logSettingsKey]
+			d, err := time.ParseDuration(strings.TrimSpace(m.input.Value()))
+			if err != nil || d < time.Second {
+				m.note("Use a duration of at least 1s, such as 10s or 2m.")
+				m.inputMode = mode
+				return m.input.Focus()
+			}
+			if s != nil {
+				m.changeLogMode(s, "poll", d.String())
+			}
+			return m.syncLogs()
+		}
 		if m.inputAction != nil {
 			a := *m.inputAction
 			m.inputAction = nil
@@ -335,6 +372,9 @@ func (m *model) inputKey(k tea.KeyPressMsg) tea.Cmd {
 }
 func (m *model) overlayKey(k tea.KeyPressMsg) tea.Cmd {
 	key := k.String()
+	if strings.HasPrefix(m.overlay, "upgrade-") {
+		return m.upgradeKey(k)
+	}
 	if k.IsRepeat && key == "enter" {
 		return nil
 	}
@@ -345,6 +385,8 @@ func (m *model) overlayKey(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	switch m.overlay {
+	case "log-settings":
+		return m.logSettingsKeypress(k)
 	case "actions":
 		switch key {
 		case "up":
@@ -379,7 +421,12 @@ func (m *model) overlayKey(k tea.KeyPressMsg) tea.Cmd {
 			m.menuIndex = max(0, m.menuIndex-1)
 			return nil
 		}
-		if key == "enter" && m.confirm != nil {
+		if key == "enter" || key == "n" {
+			m.overlay = ""
+			m.confirm = nil
+			return nil
+		}
+		if key == "y" && m.confirm != nil && !k.IsRepeat {
 			a := *m.confirm
 			m.confirm = nil
 			m.overlay = ""
@@ -440,7 +487,7 @@ func (m *model) overlayKey(k tea.KeyPressMsg) tea.Cmd {
 			m.reconcileSelection()
 			return m.preview()
 		}
-	case "help", "events":
+	case "help", "events", "task-info":
 		if key == "q" || key == "?" || key == "enter" {
 			m.overlay = ""
 		}
@@ -450,11 +497,31 @@ func (m *model) overlayKey(k tea.KeyPressMsg) tea.Cmd {
 		if key == "up" || key == "k" {
 			m.menuIndex = max(0, m.menuIndex-1)
 		}
+		if key == "pgdown" || key == "ctrl+d" {
+			m.menuIndex += max(1, m.height-8)
+		}
+		if key == "pgup" || key == "ctrl+u" {
+			m.menuIndex = max(0, m.menuIndex-max(1, m.height-8))
+		}
 	}
 	return nil
 }
 func (m *model) perform(a action) tea.Cmd {
 	switch a.ID {
+	case "upgrade-self":
+		return m.checkUpgrade(nil)
+	case "upgrade-backend":
+		if a.Target != nil {
+			return m.checkUpgrade(&a.Target.Connection)
+		}
+	case "monitor":
+		return m.addWatches()
+	case "edit-task":
+		return m.openEdit()
+	case "copy-failure":
+		if r, ok := m.task(); ok {
+			return m.copyFailure(r)
+		}
 	case "add":
 		return m.openTask("new")
 	case "clone":
@@ -516,13 +583,13 @@ func (m *model) perform(a action) tea.Cmd {
 			}
 			return m.input.Focus()
 		}
-	case "clean-success", "clean-all":
+	case "clean-success", "clean-all", "clear-group":
 		if a.Target != nil {
 			p := *a.Target
 			p.Request.Guards = map[int]time.Time{}
 			if s := m.states[p.Connection.ID]; s != nil {
 				for _, t := range s.Snapshot.Tasks {
-					if !t.Terminal() || (p.Request.Group != "" && t.Group != p.Request.Group) || (p.Request.SuccessfulOnly && t.Failed()) {
+					if (a.ID != "clear-group" && !t.Terminal()) || (p.Request.Group != "" && t.Group != p.Request.Group) || (p.Request.SuccessfulOnly && t.Failed()) {
 						continue
 					}
 					p.Request.IDs = append(p.Request.IDs, t.ID)
@@ -561,6 +628,10 @@ func (m *model) perform(a action) tea.Cmd {
 	return nil
 }
 func (m *model) prepare(a pendingAction) tea.Cmd {
+	if m.backendMaintenanceActive() {
+		m.note("Backend maintenance is applying; wait before changing tasks on any connection.")
+		return nil
+	}
 	if s := m.states[a.Connection.ID]; s != nil && s.Writing {
 		m.note("Wait for the current operation on " + a.Connection.DisplayName() + ".")
 		return nil

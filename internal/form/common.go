@@ -47,7 +47,7 @@ func render(title string, body []string, focus, w, h int, status, footer string)
 		return strings.Join([]string{fit(title, w), fit("Ctrl+C cancel", w)}[:min(2, h)], "\n")
 	}
 	capacity := h - 3
-	start := max(0, min(focus-capacity/2, len(body)-capacity))
+	start := visibleStart(len(body), focus, h)
 	end := min(len(body), start+capacity)
 	lines := []string{fit(safe(title), w)}
 	for _, line := range body[start:end] {
@@ -102,27 +102,6 @@ func (p *picker) update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 func (p *picker) view(w, h int) string {
-	body := []string{"Filter: " + p.query.View()}
-	for i, c := range p.visible() {
-		mark := "  "
-		if i == p.index {
-			mark = "> "
-		}
-		if p.kind == "dependencies" {
-			if p.selected[c.id] {
-				mark += "[x] "
-			} else {
-				mark += "[ ] "
-			}
-		}
-		body = append(body, mark+safe(c.label))
-	}
-	if len(body) == 1 {
-		body = append(body, "No matching choices")
-	}
-	foot := "↑↓ choose · Enter select · Esc back"
-	if p.kind == "dependencies" {
-		foot = "↑↓ choose · Enter toggle · Ctrl+S accept · Esc back"
-	}
-	return render("Choose "+p.kind, body, p.index+1, w, h, "Type to filter; j/k remain text", foot)
+	body, focus, _ := p.body()
+	return render("Choose "+p.kind, body, focus, w, h, "Type to filter; j/k remain text", p.footer(w, h).text)
 }

@@ -5,6 +5,13 @@ default_connection = "all"
 [tui]
 refresh_seconds = 2
 background_seconds = 5
+mouse = true
+
+[logs]
+single_mode = "auto" # local/native live; SSH polling
+multi_mode = "poll" # live, poll, or manual
+poll_interval = "10s"
+tail_lines = 200
 
 [[connections]]
 id = "local"
@@ -22,6 +29,9 @@ ssh_host = "lab-server" # An existing alias in ~/.ssh/config
 # config_path = "/home/user/.config/pueue/pueue.yml" # Remote path
 # profile = "batch"
 
+[connections.logs]
+poll_interval = "30s" # This connection overrides the global interval.
+
 # Native connection through an existing local Pueue client configuration.
 # Uncomment the whole block after configuring Pueue's TLS or forwarded socket.
 # [[connections]]
@@ -30,7 +40,7 @@ ssh_host = "lab-server" # An existing alias in ~/.ssh/config
 # kind = "native"
 # config_path = "/home/user/.config/pueue/remote.yml" # Local path
 # profile = "lab"
-# ssh_host = "lab-server" # Used only for new task submission
+# ssh_host = "lab-server" # Remote submission and reviewed backend maintenance
 # ssh_binary = "/home/user/.cargo/bin/pueue" # Companion's remote Pueue executable
 # ssh_config = "/home/user/.config/pueue/pueue.yml" # Companion's remote path
 # ssh_profile = "batch"

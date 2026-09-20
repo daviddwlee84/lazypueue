@@ -151,6 +151,7 @@ func fakeClient(t *testing.T, fixture []byte, mutation string) (*Client, core.Co
 		t.Fatal(err)
 	}
 	binary := filepath.Join(dir, "pueue")
+	mutation = strings.ReplaceAll(mutation, "__STATE__", shellQuote(state))
 	script := "#!/bin/sh\nshift 4\ncase \"$1\" in\nstatus) cat " + shellQuote(state) + " ;;\n--version) printf 'pueue 4.0.2\\n' ;;\n*) printf '%s\\n' \"$@\" >> " + shellQuote(calls) + "\n" + mutation + "\n;;\nesac\n"
 	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
 		t.Fatal(err)
@@ -166,7 +167,13 @@ func fakeClient(t *testing.T, fixture []byte, mutation string) (*Client, core.Co
 
 func TestCleanUsesReviewedIDsAndRechecksIdentity(t *testing.T) {
 	fixture := wireFixture(`{"Done":{"result":"Success"}}`, `{"Done":{"result":"Success"}}`)
-	client, conn, calls := fakeClient(t, fixture, "exit 0")
+	var changed map[string]any
+	if err := json.Unmarshal(fixture, &changed); err != nil {
+		t.Fatal(err)
+	}
+	delete(changed["tasks"].(map[string]any), "0")
+	remaining, _ := json.Marshal(changed)
+	client, conn, calls := fakeClient(t, fixture, "printf '%s' "+shellQuote(string(remaining))+" > __STATE__\nexit 0")
 	stamp, _ := time.Parse(time.RFC3339Nano, created)
 	result, err := client.Execute(context.Background(), conn, core.Request{Operation: "clean", IDs: []int{0}, Guards: map[int]time.Time{0: stamp}, SuccessfulOnly: true})
 	if err != nil {

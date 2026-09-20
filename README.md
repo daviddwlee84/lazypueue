@@ -34,28 +34,32 @@ The overview keeps per-connection health, task counts, group capacity, tasks, an
 | `↑` / `↓`, `j` / `k` | Move within the focused pane |
 | `Tab` / `Shift+Tab`, `h` / `l` | Switch panes |
 | `gg` / `G` | First / last row |
-| `1` / `2` | Tasks / Groups |
+| `0` / `1` / `2` / `3` / `4` | Scope / Tasks / Groups / Detail-log / Monitor |
 | `/` | Search tasks/groups |
 | `s` | Filter by status |
 | `Enter` | Open task log; drill into a group |
 | `Space` | Select tasks for a batch action within one connection |
+| `W` | Add selected tasks to Monitor; repeat on another connection for cross-host monitoring |
 | `n` | Add-task wizard |
 | `a` | Add a job depending on the selected task |
 | `p` | Pause a running task or resume a paused task |
-| `R` | Restart as a new task |
+| `R` / `I` | Review restart as a new task / in place |
+| `e` | Edit a task; completed/running tasks use a reviewed retry workflow |
+| `Y` | Copy a failure report with task metadata and recent output |
 | `F` | Follow task output |
 | `t` | Manage connections and choose a connection or All |
 | `:` | Search available actions, including copy, duplicate, cleanup, and group controls |
 | `r` | Refresh |
 | `?` | Contextual help |
+| `m` | Toggle mouse capture (enabled by default) |
 | `Esc` | Back / close the current surface |
 | `q` | Quit from the dashboard |
 
-Task actions are enabled according to current task state. The action menu includes restart in place, force-start, stash/enqueue, kill/remove, copying the command or a reproducible `pueue add`, duplicate-and-edit, and adding dependent work. Group actions include creation, pause/resume, concurrency, restart failed jobs, and cleanup. Destructive or group-wide actions show a review of their target and consequence.
+Task actions are enabled according to current task state. The action menu includes restart in place, force-start, stash/enqueue, kill/remove, copying the command or a reproducible `pueue add`, duplicate-and-edit, and adding dependent work. Group actions include creation, pause/resume, concurrency, restart failed jobs, cleanup, and clearing the reviewed tasks while retaining the group. Destructive actions and every restart require a default-No review: `y` applies; `Enter`, `n`, or `Esc` cancels. Mouse clicks focus panes, select rows and operate visible buttons; the wheel scrolls the pane beneath it.
 
-Log viewing has a bounded buffer, text search, scrolling, and a follow mode. In the log view, `/` searches, `n`/`N` move between matches, `f` toggles autoscroll, `G` resumes autoscroll, and `y` copies the buffer. `Esc` returns to the same task.
+The inline detail and expanded log share one collector. `L` selects Live, Polling, or Manual and a refresh interval; `Space` pauses collection, `r` reads once, and `G` returns to the tail. Local/native single-task logs default to live; SSH and multi-task Monitor default to polling every 10 seconds. `PgUp`/`PgDn` and `Ctrl+U`/`Ctrl+D` scroll; `/` searches and `n`/`N` change matches. `y` copies loaded plain text, `Y` copies a failure report, `i` shows metadata, and `o` opens the full log in a pager. Safe original colors and severity coloring improve scanability. See [log monitoring and configuration](docs/logs.md).
 
-Group progress means **finished tasks / retained tasks**, including failures. It is not progress inside a running command. Estimated remaining time uses observed task durations and is unavailable when there is not enough evidence or the group's concurrency is unlimited.
+Queue/group progress means **finished tasks / retained tasks**, including failures. Running-task progress is separate: it appears only when a recognizable tqdm bar or explicit progress record exists in the output; `i` shows the matched source and observation time. Estimated group time uses observed task durations and is unavailable when there is not enough evidence or concurrency is unlimited.
 
 ## Task wizard
 
@@ -69,6 +73,8 @@ Use `n` in the dashboard or bare `lazypueue add` in a terminal. Both use the sam
 
 Connection setup uses the same review/submit pattern. `Ctrl+T` tests a connection draft without saving it. Editing a connection preserves unrelated configuration fields and comments.
 
+Task editing (`e` or `lazypueue edit ID`) starts from the original command and edits command, directory, label and priority. Queued/stashed tasks keep their IDs. Completed tasks default to a new ID, preserving the original environment and logs; advanced options allow in-place retry or keeping the result stashed. Running/paused tasks are stopped only after the draft's final `y` review. Interrupted native edits can be recovered with “Recover locked task to stash” in the action menu.
+
 ## Scriptable commands
 
 ```sh
@@ -76,6 +82,8 @@ lazypueue status --connection all --json
 lazypueue status --connection lab --group ml --state failed
 lazypueue group list --connection all --json
 lazypueue log 42 --connection lab --lines 500
+lazypueue log 42 43 --connection lab --lines 200 --json
+lazypueue log 42 --connection lab --full
 lazypueue follow 42 --connection lab
 
 # Pass the complete shell command as ONE argument.
@@ -89,7 +97,9 @@ lazypueue add --dry-run --json -- 'echo hello'
 lazypueue pause 42
 lazypueue start 42 --yes                   # force-start may skip dependencies/slots
 lazypueue restart 42                      # new ID; old logs remain
-lazypueue restart 42 --in-place --yes      # same ID; overwrites logs
+lazypueue restart 42 -i --yes              # same ID; overwrites logs
+lazypueue restart 42 -e                    # edit and review before retrying
+lazypueue edit 43 --command 'python corrected.py' --yes
 lazypueue restart-failed --group ml --yes
 lazypueue stash 43
 lazypueue enqueue 43
@@ -102,13 +112,14 @@ lazypueue parallel 4 --group ml --yes       # 0 means unlimited
 lazypueue group pause ml --yes
 lazypueue group start ml --yes
 lazypueue group remove ml --yes            # only empty groups can be removed
+lazypueue group clear ml --yes             # stop/remove reviewed tasks; keep group
 ```
 
 Add `--connection ID` to target a specific queue. With no connection flag, single-target commands use the configured default, or the first connection when the default is `all`. Explicit `--connection all` is supported by `status` and `group list`; it cannot broadcast mutations.
 
-Global flags are `--config`, `--connection`, `--json`, `--interactive`, `--yes`, and `--dry-run`. Mutations support pure previews: `--dry-run` performs no daemon probes or writes. Confirmed operations use `--yes` for scripts. `follow` streams plain text and does not support JSON.
+Global flags are `--config`, `--connection`, `--json`, `--interactive`, `--yes`, and `--dry-run`. `--dry-run` never applies changes. Ordinary task/group previews perform no daemon probes; edit previews read the existing task to retain unspecified fields, and upgrade previews inspect versions and installation state. Confirmed operations use `--yes` for scripts. `follow` streams plain text and does not support JSON.
 
-Only bare `add` and `connections add` automatically start a wizard in a terminal; `connections edit ID` with no field flags opens its edit form. Partial business flags without `--interactive` produce an error when required data is missing. Pipes and `--json` never prompt. Invalid flags are rejected before starting a form.
+Bare `add`, `connections add`, and `edit ID` start their form in a terminal; `connections edit ID` with no field flags opens its edit form. Partial business flags without `--interactive` produce an error when required data is missing. Pipes and `--json` never prompt. Invalid flags are rejected before starting a form. Use the long `--interactive` flag; `restart -i` means in-place, matching Pueue.
 
 JSON data goes to stdout; errors go to stderr as `{"error":"...","exit_code":2}` when `--json` is parsed. `status --connection ID --json` emits one sanitized snapshot; `status --connection all --json` emits a `connections` array containing each snapshot or error. A partial connection failure preserves successful results and returns exit 1. Task environments are omitted from snapshots and log JSON.
 
@@ -135,7 +146,21 @@ See [examples/config.toml](examples/config.toml) for local, SSH, and native conn
 
 Native task submission requires an SSH companion (`ssh_host`, with optional `ssh_config` / `ssh_profile`). Native Pueue submission captures the local client's environment; Pueue 4.0.3 and 4.0.4 also resolve the working directory locally. Lazypueue consistently uses the SSH companion for submission so the directory and environment come from the remote host. Reads and controls continue using the native connection. A connection without a companion can still inspect logs and control existing tasks.
 
-Pueue dependencies wait for **all parents to succeed**. Failed parents result in `DependencyFailed`; the dashboard displays spawn failures and other non-success terminal results as failures. This app manages existing queues and does not distribute jobs between hosts, create a new scheduler, or manage daemon services.
+Pueue dependencies wait for **all parents to succeed**. Failed parents result in `DependencyFailed`; the dashboard displays spawn failures and other non-success terminal results as failures. This app manages existing queues and does not distribute jobs between hosts or create a new scheduler. Daemon services change only through explicitly reviewed backend maintenance.
+
+## Upgrades
+
+```sh
+lazypueue upgrade --check --json
+lazypueue upgrade --yes
+lazypueue backend status --connection all --json
+lazypueue backend upgrade --connection lab --check
+lazypueue backend upgrade --connection lab --yes
+```
+
+Self-upgrade builds a captured stable source release and atomically replaces the same resolved executable. Development copies need `--force`; package-owned or unknown copies are preserved. With no published stable release, check reports `source-unavailable`.
+
+Backend upgrades support verified Homebrew/Cargo ownership and a matching Homebrew or systemd user service. They require an idle queue, preserve paused groups, record every maintenance phase, and refuse active work even with `--yes`. Native connections require an SSH companion for administration. Read [upgrade behavior and recovery](docs/upgrades.md) before maintaining a daemon.
 
 ## Development
 

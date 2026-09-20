@@ -152,7 +152,7 @@ func TestCapturedActionRoutesToOriginalHost(t *testing.T) {
 	if m.overlayKey(repeated) != nil || m.confirm == nil {
 		t.Fatal("repeated Enter submitted a confirmation")
 	}
-	cmd := m.overlayKey(key("enter"))
+	cmd := m.overlayKey(key("y"))
 	if cmd == nil {
 		t.Fatal("no execute command")
 	}
@@ -200,7 +200,7 @@ func TestLogGenerationBoundAndControls(t *testing.T) {
 	m, _ := fixture(t)
 	ctx, cancel := context.WithCancel(m.ctx)
 	defer cancel()
-	m.log = logState{Open: true, Key: "local/7", Generation: 4, Context: ctx, AutoScroll: true}
+	m.log = &logState{Open: true, Key: "local/7", Generation: 4, Context: ctx, AutoScroll: true}
 	m.acceptLog(logChunkMsg{Key: "lab/7", Generation: 4, Text: "wrong host", Done: true})
 	m.acceptLog(logChunkMsg{Key: "local/7", Generation: 3, Text: "old", Done: true})
 	if m.log.Text != "" {
@@ -326,7 +326,7 @@ func TestGroupRestartPinsReviewedFailures(t *testing.T) {
 	extra := s.Snapshot.Tasks[1]
 	extra.ID = 20
 	s.Snapshot.Tasks = append(s.Snapshot.Tasks, extra)
-	cmd := m.overlayKey(key("enter"))
+	cmd := m.overlayKey(key("y"))
 	cmd()
 	if len(b.request.IDs) != 1 || b.request.IDs[0] != 8 {
 		t.Fatal("restart expanded after review")

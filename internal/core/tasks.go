@@ -93,17 +93,24 @@ func ValidateAdd(a AddRequest) error {
 
 // Eligible is shared by keyboard hints and the backend's fresh-state checks.
 func Eligible(operation string, t Task) bool {
+	if operation == "recover-stash" {
+		return t.Locked
+	}
 	if t.Locked {
 		return false
 	}
 	switch operation {
-	case "restart", "restart-failed":
+	case "clear-group":
+		return t.Terminal() || t.State() == "running" || t.State() == "paused" || t.State() == "queued" || t.State() == "stashed"
+	case "restart", "restart-failed", "edit-restart":
 		return t.Terminal()
 	case "pause":
 		return t.State() == "running"
 	case "start":
 		return t.State() == "paused" || t.State() == "queued" || t.State() == "stashed"
 	case "kill":
+		return t.State() == "running" || t.State() == "paused"
+	case "stop-edit-restart":
 		return t.State() == "running" || t.State() == "paused"
 	case "stash":
 		return t.State() == "queued"

@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"errors"
+	"github.com/daviddwlee84/lazypueue/internal/core"
 	"sort"
 	"strings"
 
@@ -205,7 +206,7 @@ func preserve(raw []byte, cfg Config) ([]byte, error) {
 		return nil, err
 	}
 	for _, e := range exprs {
-		if e.kind == unstable.KeyValue && e.table == "" && (e.key == "connections" || e.key == "tui" || strings.HasPrefix(e.key, "tui.")) {
+		if e.kind == unstable.KeyValue && e.table == "" && (e.key == "connections" || e.key == "tui" || strings.HasPrefix(e.key, "tui.") || e.key == "logs" || strings.HasPrefix(e.key, "logs.")) {
 			return nil, errors.New("inline connection arrays or TUI settings cannot be preserved safely; use [[connections]] and [tui] tables")
 		}
 	}
@@ -236,11 +237,19 @@ func preserve(raw []byte, cfg Config) ([]byte, error) {
 	} else {
 		b = raw[start:end]
 	}
-	b, err = patchFields(b, "tui", []field{{"refresh_seconds", cfg.TUI.RefreshSeconds}, {"background_seconds", cfg.TUI.BackgroundSeconds}})
+	tuiFields := []field{{"refresh_seconds", cfg.TUI.RefreshSeconds}, {"background_seconds", cfg.TUI.BackgroundSeconds}}
+	if cfg.TUI.Mouse != nil {
+		tuiFields = append(tuiFields, field{"mouse", *cfg.TUI.Mouse})
+	}
+	b, err = patchFields(b, "tui", tuiFields)
 	if err != nil {
 		return nil, err
 	}
 	raw = applyEdits(raw, []edit{{start, end, b}})
+	raw, err = patchTable(raw, "logs", logFields(cfg.Logs))
+	if err != nil {
+		return nil, err
+	}
 	old, err := arrayBlocks(raw, "connections")
 	if err != nil {
 		return nil, err
@@ -259,7 +268,68 @@ func preserve(raw []byte, cfg Config) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		b, err = patchTable(b, "connections.logs", logFields(c.Logs))
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, b)
 	}
 	return replaceBlocks(raw, old, out), nil
+}
+
+func logFields(s core.LogSettings) []field {
+	return []field{{"single_mode", s.SingleMode}, {"multi_mode", s.MultiMode}, {"poll_interval", s.PollInterval}, {"tail_lines", s.TailLines}}
+}
+func patchTable(raw []byte, scope string, fields []field) ([]byte, error) {
+	exprs, err := expressions(raw)
+	if err != nil {
+		return nil, err
+	}
+	start, end := -1, len(raw)
+	parent, key := "", scope
+	if p := strings.LastIndex(scope, "."); p >= 0 {
+		parent, key = scope[:p], scope[p+1:]
+	}
+	for _, e := range exprs {
+		if e.kind == unstable.KeyValue && e.table == parent && (e.key == key || strings.HasPrefix(e.key, key+".")) {
+			return nil, errors.New("inline or dotted log settings cannot be safely preserved; use [" + scope + "]")
+		}
+		if e.kind != unstable.Table && e.kind != unstable.ArrayTable {
+			continue
+		}
+		if start >= 0 {
+			end = e.start
+			break
+		}
+		if e.kind == unstable.Table && e.key == scope {
+			start = e.start
+		}
+	}
+	if start < 0 {
+		empty := true
+		for _, f := range fields {
+			switch v := f.value.(type) {
+			case string:
+				empty = empty && v == ""
+			case int:
+				empty = empty && v == 0
+			default:
+				empty = false
+			}
+		}
+		if empty {
+			return raw, nil
+		}
+	}
+	b := []byte("\n[" + scope + "]\n")
+	if start < 0 {
+		start, end = len(raw), len(raw)
+	} else {
+		b = raw[start:end]
+	}
+	b, err = patchFields(b, scope, fields)
+	if err != nil {
+		return nil, err
+	}
+	return applyEdits(raw, []edit{{start, end, b}}), nil
 }

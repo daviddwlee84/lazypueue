@@ -7,21 +7,22 @@ import (
 
 // Connection references credentials by file path; it never contains their contents.
 type Connection struct {
-	ID         string `toml:"id" json:"id"`
-	Name       string `toml:"name,omitempty" json:"name,omitempty"`
-	Kind       string `toml:"kind" json:"kind"`
-	Binary     string `toml:"binary,omitempty" json:"binary,omitempty"`
-	ConfigPath string `toml:"config_path,omitempty" json:"config_path,omitempty"`
-	Profile    string `toml:"profile,omitempty" json:"profile,omitempty"`
-	SSHHost    string `toml:"ssh_host,omitempty" json:"ssh_host,omitempty"`
-	SSHBinary  string `toml:"ssh_binary,omitempty" json:"ssh_binary,omitempty"`
-	SSHConfig  string `toml:"ssh_config,omitempty" json:"ssh_config,omitempty"`
-	SSHProfile string `toml:"ssh_profile,omitempty" json:"ssh_profile,omitempty"`
-	Host       string `toml:"host,omitempty" json:"host,omitempty"`
-	Port       int    `toml:"port,omitempty" json:"port,omitempty"`
-	CertPath   string `toml:"cert_path,omitempty" json:"cert_path,omitempty"`
-	SecretPath string `toml:"secret_path,omitempty" json:"secret_path,omitempty"`
-	SocketPath string `toml:"socket_path,omitempty" json:"socket_path,omitempty"`
+	ID         string      `toml:"id" json:"id"`
+	Name       string      `toml:"name,omitempty" json:"name,omitempty"`
+	Kind       string      `toml:"kind" json:"kind"`
+	Binary     string      `toml:"binary,omitempty" json:"binary,omitempty"`
+	ConfigPath string      `toml:"config_path,omitempty" json:"config_path,omitempty"`
+	Profile    string      `toml:"profile,omitempty" json:"profile,omitempty"`
+	SSHHost    string      `toml:"ssh_host,omitempty" json:"ssh_host,omitempty"`
+	SSHBinary  string      `toml:"ssh_binary,omitempty" json:"ssh_binary,omitempty"`
+	SSHConfig  string      `toml:"ssh_config,omitempty" json:"ssh_config,omitempty"`
+	SSHProfile string      `toml:"ssh_profile,omitempty" json:"ssh_profile,omitempty"`
+	Host       string      `toml:"host,omitempty" json:"host,omitempty"`
+	Port       int         `toml:"port,omitempty" json:"port,omitempty"`
+	CertPath   string      `toml:"cert_path,omitempty" json:"cert_path,omitempty"`
+	SecretPath string      `toml:"secret_path,omitempty" json:"secret_path,omitempty"`
+	SocketPath string      `toml:"socket_path,omitempty" json:"socket_path,omitempty"`
+	Logs       LogSettings `toml:"logs,omitempty" json:"logs,omitempty"`
 }
 
 func (c Connection) DisplayName() string {
@@ -89,6 +90,7 @@ type Request struct {
 	ResumeOnly     bool              `json:"resume_only,omitempty"`
 	SuccessfulOnly bool              `json:"successful_only,omitempty"`
 	Add            *AddRequest       `json:"add,omitempty"`
+	Edit           *EditRequest      `json:"edit,omitempty"`
 }
 
 type Outcome struct {

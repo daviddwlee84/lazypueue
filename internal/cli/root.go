@@ -14,6 +14,8 @@ import (
 
 	"github.com/daviddwlee84/lazypueue/internal/config"
 	"github.com/daviddwlee84/lazypueue/internal/core"
+	"github.com/daviddwlee84/lazypueue/internal/maintenance"
+	"github.com/daviddwlee84/lazypueue/internal/selfupdate"
 	"github.com/daviddwlee84/lazypueue/internal/tui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -21,6 +23,9 @@ import (
 
 // Options supplies dependencies without requiring a daemon or terminal in tests.
 type Options struct {
+	SelfCheck    func(context.Context) (selfupdate.Plan, error)
+	SelfApply    func(context.Context, selfupdate.Plan, selfupdate.ApplyOptions, io.Writer) (selfupdate.Result, error)
+	Maintenance  *maintenance.Service
 	Backend      core.Backend
 	Input        io.Reader
 	Output       io.Writer
@@ -148,9 +153,9 @@ func NewRoot(options Options) *cobra.Command {
 	f.StringVar(&a.configPath, "config", "", "Configuration file (default: $XDG_CONFIG_HOME/lazypueue/config.toml)")
 	f.StringVarP(&a.connection, "connection", "c", "", "Connection ID; 'all' is read-only")
 	f.BoolVar(&a.json, "json", false, "Write structured JSON without prompts")
-	f.BoolVarP(&a.interactive, "interactive", "i", false, "Open a supported wizard with supplied flags as defaults")
+	f.BoolVar(&a.interactive, "interactive", false, "Open a supported wizard with supplied flags as defaults")
 	f.BoolVarP(&a.yes, "yes", "y", false, "Approve the operation's confirmation")
-	f.BoolVar(&a.dryRun, "dry-run", false, "Validate and print the operation without probes or writes")
+	f.BoolVar(&a.dryRun, "dry-run", false, "Preview without applying changes (edit/upgrade previews perform read-only checks)")
 	_ = root.RegisterFlagCompletionFunc("connection", func(cmd *cobra.Command, args []string, prefix string) ([]string, cobra.ShellCompDirective) {
 		cfg, err := config.Load(a.configPath)
 		if err != nil {
@@ -167,6 +172,7 @@ func NewRoot(options Options) *cobra.Command {
 		root.AddCommand(a.taskCommand(op))
 	}
 	root.AddCommand(a.cleanCommand(), a.restartFailedCommand(), a.groupCommand(), a.parallelCommand(), a.connectionsCommand(), a.configCommand())
+	root.AddCommand(a.upgradeCommand(), a.backendCommand(), a.editCommand())
 	root.AddCommand(&cobra.Command{Use: "version", Short: "Print the build version", Args: noArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		if a.json {
 			return a.writeJSON(cmd, map[string]string{"version": options.Version})
@@ -353,7 +359,21 @@ func (a *app) reviewRequest(cmd *cobra.Command, c core.Connection, request core.
 	if err != nil {
 		return request, nil, true, err
 	}
+	expected := request.Guards
 	request.Guards = map[int]time.Time{}
+	for id, stamp := range expected {
+		found := false
+		for _, task := range snapshot.Tasks {
+			if task.ID == id && task.CreatedAt.Equal(stamp) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return request, nil, true, fmt.Errorf("task #%d changed since the draft was prepared; select it again", id)
+		}
+		request.Guards[id] = stamp
+	}
 	var tasks []core.Task
 	if batch && len(request.IDs) == 0 {
 		for _, t := range snapshot.Tasks {

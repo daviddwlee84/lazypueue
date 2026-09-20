@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/daviddwlee84/lazypueue/internal/core"
@@ -22,14 +23,16 @@ type Config struct {
 	Connections       []core.Connection `toml:"connections" json:"connections"`
 	DefaultConnection string            `toml:"default_connection,omitempty" json:"default_connection,omitempty"`
 	TUI               TUIConfig         `toml:"tui" json:"tui"`
+	Logs              core.LogSettings  `toml:"logs" json:"logs"`
 	loaded            bool
 	loadedPath        string
 	original          []byte
 	existed           bool
 }
 type TUIConfig struct {
-	RefreshSeconds    int `toml:"refresh_seconds" json:"refresh_seconds"`
-	BackgroundSeconds int `toml:"background_seconds" json:"background_seconds"`
+	RefreshSeconds    int   `toml:"refresh_seconds" json:"refresh_seconds"`
+	BackgroundSeconds int   `toml:"background_seconds" json:"background_seconds"`
+	Mouse             *bool `toml:"mouse,omitempty" json:"mouse,omitempty"`
 }
 
 var ErrConflict = errors.New("configuration changed since it was loaded; reload it before saving")
@@ -37,7 +40,48 @@ var saveMu sync.Mutex
 var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
 func Default() Config {
-	return Config{Connections: []core.Connection{{ID: "local", Name: "Local", Kind: "local"}}, DefaultConnection: "all", TUI: TUIConfig{RefreshSeconds: 2, BackgroundSeconds: 5}}
+	mouse := true
+	return Config{Connections: []core.Connection{{ID: "local", Name: "Local", Kind: "local"}}, DefaultConnection: "all", TUI: TUIConfig{RefreshSeconds: 2, BackgroundSeconds: 5, Mouse: &mouse}, Logs: DefaultLogs()}
+}
+
+func DefaultLogs() core.LogSettings {
+	return core.LogSettings{SingleMode: "auto", MultiMode: "poll", PollInterval: "10s", TailLines: 200}
+}
+func MergeLogs(parent, override core.LogSettings) core.LogSettings {
+	if override.SingleMode != "" {
+		parent.SingleMode = override.SingleMode
+	}
+	if override.MultiMode != "" {
+		parent.MultiMode = override.MultiMode
+	}
+	if override.PollInterval != "" {
+		parent.PollInterval = override.PollInterval
+	}
+	if override.TailLines != 0 {
+		parent.TailLines = override.TailLines
+	}
+	return parent
+}
+func (cfg Config) EffectiveLogs(c core.Connection) core.LogSettings {
+	return MergeLogs(MergeLogs(DefaultLogs(), cfg.Logs), c.Logs)
+}
+func ValidateLogSettings(s core.LogSettings) error {
+	if s.SingleMode != "" && s.SingleMode != "auto" && s.SingleMode != "live" && s.SingleMode != "poll" && s.SingleMode != "manual" {
+		return errors.New("single_mode must be auto, live, poll, or manual")
+	}
+	if s.MultiMode != "" && s.MultiMode != "live" && s.MultiMode != "poll" && s.MultiMode != "manual" {
+		return errors.New("multi_mode must be live, poll, or manual")
+	}
+	if s.PollInterval != "" {
+		d, err := time.ParseDuration(s.PollInterval)
+		if err != nil || d < time.Second {
+			return errors.New("poll_interval must be a duration of at least 1s")
+		}
+	}
+	if s.TailLines < 0 || s.TailLines > 10000 {
+		return errors.New("tail_lines must be 1–10000, or 0 to inherit")
+	}
+	return nil
 }
 
 func xdgPath(variable, fallback, filename string) (string, error) {
@@ -110,6 +154,9 @@ func (cfg Config) Connection(id string) (core.Connection, error) {
 }
 
 func Validate(cfg Config) error {
+	if err := ValidateLogSettings(cfg.Logs); err != nil {
+		return fmt.Errorf("logs: %w", err)
+	}
 	seen := map[string]bool{}
 	for _, c := range cfg.Connections {
 		if err := ValidateConnection(c); err != nil {
@@ -130,6 +177,9 @@ func Validate(cfg Config) error {
 }
 
 func ValidateConnection(c core.Connection) error {
+	if err := ValidateLogSettings(c.Logs); err != nil {
+		return fmt.Errorf("logs: %w", err)
+	}
 	if !validID.MatchString(c.ID) || c.ID == "all" {
 		return errors.New("ID must contain letters, digits, dots, underscores or hyphens and cannot be 'all'")
 	}
@@ -287,6 +337,17 @@ type State struct {
 	Scope    string               `json:"scope"`
 	LastUsed map[string]LastUsed  `json:"last_used"`
 	Views    map[string]ViewState `json:"views"`
+	Watches  []WatchState         `json:"watches,omitempty"`
+	Mouse    *bool                `json:"mouse,omitempty"`
+}
+type WatchState struct {
+	Connection string    `json:"connection"`
+	TaskID     int       `json:"task_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	Mode       string    `json:"mode"`
+	Interval   string    `json:"interval"`
+	Lines      int       `json:"lines"`
+	Paused     bool      `json:"paused"`
 }
 
 func StatePath() (string, error) { return xdgPath("XDG_STATE_HOME", ".local/state", "state.json") }

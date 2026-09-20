@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,17 +182,27 @@ func oneLine(s string) string {
 
 func (a *app) logCommand(follow bool) *cobra.Command {
 	var lines int
+	var full bool
 	name, short := "log", "Read a bounded task log"
 	if follow {
 		name = "follow"
 		short = "Follow a task's output until it ends or Ctrl+C"
 	}
-	cmd := &cobra.Command{Use: name + " ID", Short: short, Args: exactArgs(1)}
+	cmd := &cobra.Command{Use: name + " ID [ID...]", Short: short}
+	if follow {
+		cmd.Args = exactArgs(1)
+	}
 	cmd.Flags().IntVarP(&lines, "lines", "n", 200, "Number of initial tail lines")
+	if !follow {
+		cmd.Flags().BoolVar(&full, "full", false, "Stream complete plain-text logs (cannot use --json)")
+	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		ids, err := parseIDs(args)
 		if err != nil {
 			return err
+		}
+		if full && (a.json || cmd.Flags().Changed("lines")) {
+			return usage("--full cannot be combined with --json or --lines")
 		}
 		if lines < 1 {
 			return usage("--lines must be positive")
@@ -215,29 +227,91 @@ func (a *app) logCommand(follow bool) *cobra.Command {
 		if follow {
 			return a.options.Backend.Follow(cmd.Context(), c, ids[0], lines, func(s string) { fmt.Fprint(cmd.OutOrStdout(), s) })
 		}
-		output, err := a.options.Backend.Log(cmd.Context(), c, ids[0], lines)
+		if full {
+			streamer, ok := a.options.Backend.(interface {
+				FullLog(context.Context, core.Connection, int, io.Writer) error
+			})
+			if !ok {
+				return fmt.Errorf("backend does not support full log streaming")
+			}
+			for _, id := range ids {
+				if len(ids) > 1 {
+					fmt.Fprintf(cmd.OutOrStdout(), "== %s #%d ==\n", c.ID, id)
+				}
+				if err := streamer.FullLog(cmd.Context(), c, id, cmd.OutOrStdout()); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		entries := map[int]core.LogResult{}
+		if batch, ok := a.options.Backend.(core.BatchLogger); ok {
+			entries, err = batch.Logs(cmd.Context(), c, ids, lines)
+		} else {
+			for _, id := range ids {
+				text, e := a.options.Backend.Log(cmd.Context(), c, id, lines)
+				item := core.LogResult{Output: text}
+				if e != nil {
+					item.Error = e.Error()
+				}
+				entries[id] = item
+			}
+		}
 		if err != nil {
 			return err
 		}
-		if a.json {
-			return a.writeJSON(cmd, map[string]any{"connection": c.ID, "task_id": ids[0], "output": output})
+		var logError error
+		for _, id := range ids {
+			if entries[id].Error != "" {
+				logError = fmt.Errorf("one or more task logs are unavailable")
+			}
 		}
-		fmt.Fprint(cmd.OutOrStdout(), output)
-		return nil
+		if a.json {
+			if len(ids) == 1 {
+				item := entries[ids[0]]
+				if err := a.writeJSON(cmd, map[string]any{"connection": c.ID, "task_id": ids[0], "output": item.Output, "error": item.Error}); err != nil {
+					return err
+				}
+			} else {
+				if err := a.writeJSON(cmd, map[string]any{"connection": c.ID, "logs": entries}); err != nil {
+					return err
+				}
+			}
+		} else {
+			for _, id := range ids {
+				if len(ids) > 1 {
+					fmt.Fprintf(cmd.OutOrStdout(), "== %s #%d ==\n", c.ID, id)
+				}
+				item := entries[id]
+				if item.Error != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "#%d: %s\n", id, item.Error)
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), item.Output)
+				}
+			}
+		}
+		return logError
 	}
 	return cmd
 }
 
 func (a *app) taskCommand(operation string) *cobra.Command {
-	var inPlace bool
+	var inPlace, edit bool
 	cmd := &cobra.Command{Use: operation + " ID [ID...]", Short: map[string]string{"pause": "Pause running tasks", "start": "Force-start or resume tasks", "restart": "Restart tasks as new tasks; retain old logs", "stash": "Stash queued tasks", "enqueue": "Enqueue stashed tasks", "kill": "Kill running tasks", "remove": "Remove tasks and their logs"}[operation]}
 	if operation == "restart" {
-		cmd.Flags().BoolVar(&inPlace, "in-place", false, "Reuse task IDs and overwrite their logs (requires confirmation)")
+		cmd.Flags().BoolVarP(&inPlace, "in-place", "i", false, "Reuse task IDs and overwrite their logs (requires confirmation)")
+		cmd.Flags().BoolVarP(&edit, "edit", "e", false, "Edit one finished task before retrying (interactive form)")
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		ids, err := parseIDs(args)
 		if err != nil {
 			return err
+		}
+		if operation == "restart" && edit {
+			if len(ids) != 1 {
+				return usage("restart --edit accepts exactly one task")
+			}
+			return a.editSelected(cmd, ids[0], "edit-restart", inPlace, nil, true)
 		}
 		if err = a.commandOnly(); err != nil {
 			return err
@@ -259,6 +333,7 @@ func (a *app) taskCommand(operation string) *cobra.Command {
 		case "start":
 			confirmation = fmt.Sprintf("Start task(s) %v immediately; queued/stashed tasks may bypass dependencies and parallel limits", ids)
 		case "restart":
+			confirmation = fmt.Sprintf("Restart task(s) %v as new tasks; preserve original logs and clear dependencies", ids)
 			if inPlace {
 				confirmation = fmt.Sprintf("Restart task(s) %v in place and overwrite their logs", ids)
 			}
@@ -351,7 +426,7 @@ func (a *app) groupCommand() *cobra.Command {
 		}
 		return snapshotErrors(rows)
 	}}
-	parent.AddCommand(list)
+	parent.AddCommand(list, a.clearGroupCommand())
 	for _, op := range []string{"add", "remove", "pause", "start"} {
 		operation := op
 		cmd := &cobra.Command{Use: op + " NAME", Short: strings.ToUpper(op[:1]) + op[1:] + " a group", Args: exactArgs(1)}

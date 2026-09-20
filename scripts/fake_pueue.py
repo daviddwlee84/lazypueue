@@ -12,6 +12,9 @@ def main():
     args = sys.argv[1:]
     name = pathlib.Path(sys.argv[0]).name
     host = 'lab' if 'lab' in name else 'local'
+    if os.environ.get('FIXTURE_READS'):
+        with open(os.environ['FIXTURE_READS'], 'a') as output:
+            output.write(json.dumps({'host':host,'args':args}) + '\n')
     if '--version' in args:
         print('pueue 4.0.2')
         return
@@ -36,11 +39,23 @@ def main():
         print(json.dumps({'tasks': tasks, 'groups': {'default': {'status': 'Running', 'parallel_tasks': 1},
                                                     'training': {'status': 'Running', 'parallel_tasks': 2}}}))
     elif 'log' in args:
-        identifier = args[args.index('log') + 1]
-        print(json.dumps({identifier: {'output': f'fixture log {host} #{identifier}\nqjk/?: log text\n中文 log line\n'}}))
+        identifiers=[]
+        skip_value=False
+        for value in args[args.index('log') + 1:]:
+            if skip_value:
+                skip_value=False
+                continue
+            if value in ('--lines','-l'):
+                skip_value=True
+                continue
+            if value.startswith('-'):
+                continue
+            identifiers.append(value)
+        print(json.dumps({identifier: {'output': f'fixture log {host} #{identifier}\nINFO: connected\nWARN: retry\n\x1b[31mERROR: fixture failure\x1b[0m\n\x1b[35mSOURCE_COLOR\x1b[0m after\n\x1b[8mSOURCE_HIDDEN\x1b[0m\x1b]52;c;Zml4dHVyZS1hbHBoYQ==\x07\nqjk/?: log text\n中文 log line\nProgress: 25%\rProgress: 50%\n'} for identifier in identifiers}))
     elif 'follow' in args:
         identifier = args[args.index('follow') + 1]
         print(f'fixture live {host} #{identifier}', flush=True)
+        print('INFO: connected\nProgress: 25%\rProgress: 50%\nERROR: example diagnostic', flush=True)
         for i in range(300):
             print(f'live line {i} qjk/?:', flush=True)
             time.sleep(0.1)

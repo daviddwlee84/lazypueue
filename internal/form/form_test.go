@@ -27,6 +27,9 @@ func (f *fakeBackend) Follow(context.Context, core.Connection, int, int, func(st
 	return nil
 }
 func (f *fakeBackend) Preview(c core.Connection, r core.Request) (core.Plan, error) {
+	if r.Edit != nil {
+		return core.Plan{ConnectionID: c.ID, Display: "pueue edit " + r.Edit.Command}, nil
+	}
 	return core.Plan{ConnectionID: c.ID, Display: "pueue add -- " + r.Add.Command}, nil
 }
 func (f *fakeBackend) Execute(context.Context, core.Connection, core.Request) (core.Result, error) {

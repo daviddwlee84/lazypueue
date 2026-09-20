@@ -38,6 +38,8 @@ type TaskModel struct {
 	plan                      core.Plan
 	reviewOffset              int
 	width                     int
+	height                    int
+	pressed                   *formPress
 }
 type taskSnapshotMsg struct {
 	owner      *TaskModel
@@ -50,7 +52,7 @@ type taskSnapshotMsg struct {
 var taskLabels = []string{"Connection (Ctrl+L choose)", "Command (multiline)", "Working directory on daemon host", "Group (Ctrl+G choose/create)", "Label (optional)", "Mode: queued / stashed / immediate (Ctrl+P choose)", "Dependencies: comma-separated IDs (Ctrl+D choose)", "Delay (optional; Pueue date expression)", "Priority", "Create missing group: yes / no", "New group parallelism (0 = unlimited)"}
 
 func NewTask(connections []core.Connection, initial core.AddRequest, selectedConnection string, backend core.Backend) *TaskModel {
-	m := &TaskModel{connections: append([]core.Connection(nil), connections...), backend: backend, Request: initial, ConnectionID: selectedConnection, width: 80}
+	m := &TaskModel{connections: append([]core.Connection(nil), connections...), backend: backend, Request: initial, ConnectionID: selectedConnection, width: 80, height: 24}
 	if m.ConnectionID == "" || m.ConnectionID == "all" {
 		if len(connections) > 0 {
 			m.ConnectionID = connections[0].ID
@@ -91,6 +93,7 @@ func NewTask(connections []core.Connection, initial core.AddRequest, selectedCon
 }
 func (m *TaskModel) Init() tea.Cmd { return tea.Batch(m.command.Focus(), m.loadSnapshot()) }
 func (m *TaskModel) Close() {
+	m.pressed = nil
 	m.generation++
 	if m.cancel != nil {
 		m.cancel()
@@ -170,6 +173,9 @@ func (m *TaskModel) Update(msg tea.Msg) (*TaskModel, tea.Cmd) {
 	if m.Done || m.Cancelled {
 		return m, nil
 	}
+	if cmd, handled := m.mouseUpdate(msg); handled {
+		return m, cmd
+	}
 	switch v := msg.(type) {
 	case taskSnapshotMsg:
 		if v.owner != m || v.generation != m.generation || v.connection != m.ConnectionID {
@@ -182,6 +188,8 @@ func (m *TaskModel) Update(msg tea.Msg) (*TaskModel, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = max(1, v.Width)
+		m.height = max(1, v.Height)
+		m.pressed = nil
 		m.command.SetWidth(max(1, v.Width-6))
 		m.command.SetHeight(max(1, min(5, v.Height-10)))
 		for i := range m.fields {
@@ -189,6 +197,7 @@ func (m *TaskModel) Update(msg tea.Msg) (*TaskModel, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyPressMsg:
+		m.pressed = nil
 		if v.IsRepeat && v.String() == "ctrl+s" {
 			return m, nil
 		}
@@ -543,22 +552,8 @@ func (m *TaskModel) View(w, h int) string {
 		for _, s := range m.plan.Consequences {
 			body = append(body, safe(s))
 		}
-		return render("Review new task", wrapLines(body, w), m.reviewOffset, w, h, status, "Ctrl+S submit · Esc edit · ↑↓ scroll · Ctrl+C cancel")
+		return render("Review new task", wrapLines(body, w), m.reviewOffset, w, h, status, m.formFooter(w, h).text)
 	}
-	var body []string
-	focusLine := 0
-	for i := 0; i < m.count(); i++ {
-		mark := "  "
-		if i == m.focus {
-			mark = "* "
-			focusLine = len(body)
-		}
-		body = append(body, mark+taskLabels[i])
-		if i == 1 {
-			body = append(body, strings.Split(m.command.View(), "\n")...)
-		} else {
-			body = append(body, m.fields[i].View())
-		}
-	}
-	return render("New Pueue task", body, focusLine, w, h, status, "Tab next · Shift+Tab back · Ctrl+O advanced · Ctrl+S review · Esc cancel")
+	body, focusLine, _ := m.body()
+	return render("New Pueue task", body, focusLine, w, h, status, m.formFooter(w, h).text)
 }

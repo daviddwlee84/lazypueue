@@ -132,9 +132,12 @@ func (m *model) View() tea.View {
 	if m.group != "" {
 		name += " / " + m.group
 	}
-	tabs := "[1 Tasks]  2 Groups"
+	tabs := "[1 Tasks]  2 Groups  4 Monitor"
 	if m.tab == 1 {
-		tabs = "1 Tasks  [2 Groups]"
+		tabs = "1 Tasks  [2 Groups]  4 Monitor"
+	}
+	if m.monitor {
+		tabs = "1 Tasks  2 Groups  [4 Monitor]"
 	}
 	header := color(fit("lazypueue  "+tabs+"   "+clean(name), w), "75")
 	summary := m.summaryLine(w)
@@ -144,34 +147,39 @@ func (m *model) View() tea.View {
 		content = block(strings.Split(m.taskForm.View(w, contentH), "\n"), w, contentH)
 	} else if m.connectionForm != nil {
 		content = block(strings.Split(m.connectionForm.View(w, contentH), "\n"), w, contentH)
+	} else if m.editForm != nil {
+		content = block(strings.Split(m.editForm.View(w, contentH), "\n"), w, contentH)
 	} else if m.overlay != "" {
 		content = m.overlayView(w, contentH)
 	} else if m.log.Open {
 		content = m.logView(w, contentH)
-	} else if w >= 120 {
-		left := 24
-		middle := (w - left) * 53 / 100
-		right := w - left - middle
-		content = sideBySide(frame("Scope", m.scopeLines(left-2, contentH-2), left, contentH, m.focus == 0), frame(m.listTitle(), m.listLines(middle-2, contentH-2), middle, contentH, m.focus == 1), frame("Details / log", m.detailLines(right-2, contentH-2), right, contentH, m.focus == 2))
-	} else if w >= 80 {
-		if m.focus == 0 {
-			left := 24
-			content = sideBySide(frame("Scope", m.scopeLines(left-2, contentH-2), left, contentH, true), frame(m.listTitle(), m.listLines(w-left-2, contentH-2), w-left, contentH, false))
-		} else {
-			top := max(3, contentH*3/5)
-			bottom := max(0, contentH-top)
-			content = frame(m.listTitle(), m.listLines(w-2, top-2), w, top, m.focus == 1) + "\n" + frame("Details / log", m.detailLines(w-2, bottom-2), w, bottom, m.focus == 2)
-		}
+	} else if m.monitor {
+		content = m.monitorView(w, contentH)
 	} else {
-		switch m.focus {
-		case 0:
-			content = frame("Scope · Tab next", m.scopeLines(w-2, contentH-2), w, contentH, true)
-		case 1:
-			content = frame(m.listTitle()+" · Tab details", m.listLines(w-2, contentH-2), w, contentH, true)
-		case 2:
-			content = frame("Details · Tab scope", m.detailLines(w-2, contentH-2), w, contentH, true)
+		g := m.geometry()
+		pane := func(r rect, title string, lines []string, focused bool) string {
+			return frame(title, lines, r.W, r.H, focused)
+		}
+		scope := pane(g.Scope, "0 Scope", m.scopeLines(g.Scope.W-2, g.Scope.H-2), m.focus == 0)
+		list := pane(g.List, m.listTitle(), m.listLines(g.List.W-2, g.List.H-2), m.focus == 1)
+		detail := pane(g.Detail, "3 Details / Log", m.activeDetailLines(g.Detail.W-2, g.Detail.H-2), m.focus == 2)
+		if g.Scope.W > 0 && g.List.W > 0 {
+			if g.Detail.W > 0 {
+				content = sideBySide(scope, list, detail)
+			} else {
+				content = sideBySide(scope, list)
+			}
+		} else if g.List.H > 0 && g.Detail.H > 0 {
+			content = list + "\n" + detail
+		} else if g.Scope.W > 0 {
+			content = scope
+		} else if g.List.W > 0 {
+			content = list
+		} else {
+			content = detail
 		}
 	}
+
 	status := clean(m.status)
 	if m.formPending {
 		status = "Applying… Ctrl+C cancels waiting; accepted tasks are not rolled back."
@@ -195,15 +203,21 @@ func (m *model) View() tea.View {
 			inputLine += fmt.Sprintf("%d selected · Space toggle · Esc clear", len(m.selected))
 		}
 		if inputLine == "" {
-			inputLine = "↑↓/jk select · Tab focus · 1/2 Tasks/Groups"
+			inputLine = "0 Scope · 1 Tasks · 2 Groups · 3 Log · 4 Monitor · Tab focus"
 		}
 	}
 	foot := m.footer()
 	view := tea.NewView(block([]string{header, summary}, w, 2) + "\n" + content + "\n" + fit(inputLine, w) + "\n" + color(fit(status, w), "214") + "\n" + fit(foot, w))
 	view.AltScreen = true
+	if m.mouse {
+		view.MouseMode = tea.MouseModeCellMotion
+	}
 	return view
 }
 func (m *model) summaryLine(w int) string {
+	if m.monitor {
+		return fit(fmt.Sprintf("%d watched · page %d/%d · Tab tile · [ / ] pages · polling is a replaceable tail snapshot", len(m.watches), m.monitorPage+1, max(1, (len(m.watches)+m.monitorCapacity()-1)/m.monitorCapacity())), w)
+	}
 	var snap core.Snapshot
 	fresh, total := 0, 0
 	for _, c := range m.cfg.Connections {
@@ -219,7 +233,10 @@ func (m *model) summaryLine(w int) string {
 		snap.Tasks = append(snap.Tasks, s.Snapshot.Tasks...)
 	}
 	s := core.Summarize(snap, m.group, time.Now())
-	return fit(fmt.Sprintf("Running %d · Queued %d · Paused %d · Stashed %d · Failed %d · Succeeded %d  | %d/%d connections fresh", s.Running, s.Queued, s.Paused, s.Stashed, s.Failed, s.Succeeded, fresh, total), w)
+	if w < 100 {
+		return fit(fmt.Sprintf("Run %d · Queue %d · Fail %d · Done %d/%d %s %.0f%% · %d/%d hosts", s.Running, s.Queued, s.Failed, s.Finished, s.Total, summaryProgressBar(s, 8), s.Progress*100, fresh, total), w)
+	}
+	return fit(fmt.Sprintf("Running %d · Queued %d · Paused %d · Failed %d · Done %d/%d %s %.0f%% | %d/%d connections fresh", s.Running, s.Queued, s.Paused, s.Failed, s.Finished, s.Total, summaryProgressBar(s, 10), s.Progress*100, fresh, total), w)
 }
 func (m *model) scopeLines(w, h int) []string {
 	rows := m.scopes()
@@ -250,9 +267,9 @@ func (m *model) scopeLines(w, h int) []string {
 }
 func (m *model) listTitle() string {
 	if m.tab == 1 {
-		return fmt.Sprintf("Groups · %d", len(m.groups()))
+		return fmt.Sprintf("2 Groups · %d", len(m.groups()))
 	}
-	return fmt.Sprintf("Tasks · %d", len(m.rows()))
+	return fmt.Sprintf("1 Tasks · %d", len(m.rows()))
 }
 func (m *model) listLines(w, h int) []string {
 	if h <= 0 {
@@ -273,7 +290,7 @@ func (m *model) listLines(w, h int) []string {
 			if r.Group.Parallel == 0 {
 				slots = "∞"
 			}
-			text := fmt.Sprintf("%s / %s  %d/%d  %s  slots %s", r.Connection.DisplayName(), r.Group.Name, s.Finished, s.Total, r.Group.Status, slots)
+			text := fmt.Sprintf("%s / %s  %d/%d %.0f%% %s slots %s", r.Connection.DisplayName(), r.Group.Name, s.Finished, s.Total, s.Progress*100, strings.Repeat("=", clamp(int(s.Progress*8), 0, 8))+strings.Repeat("-", 8-clamp(int(s.Progress*8), 0, 8)), slots)
 			out = append(out, selectedLine(text, i == v.Index, w))
 		}
 		return out
@@ -308,41 +325,15 @@ func (m *model) listLines(w, h int) []string {
 		}
 		return []string{"No tasks yet.", "n Add a task · t Connections"}
 	}
-	var all []string
-	selected := 0
-	last := ""
-	for i, r := range rows {
-		state := r.Task.State()
-		if state != last {
-			all = append(all, color("── "+strings.ToUpper(state)+" ──", stateColor(state)))
-			last = state
-		}
-		if i == v.Index {
-			selected = len(all)
-		}
-		label := r.Task.Label
-		if label == "" {
-			label = r.Task.Command
-		}
-		check := " "
-		if _, ok := m.selected[r.key()]; ok {
-			check = "x"
-		}
-		locked := ""
-		if r.Task.Locked {
-			locked = " [locked]"
-		}
-		prefix := fmt.Sprintf("%s #%d ", check, r.Task.ID)
-		if m.scope == "all" {
-			prefix = fmt.Sprintf("%s %s #%d ", check, r.Connection.DisplayName(), r.Task.ID)
-		}
-		tail := "  " + r.Task.Group + " · " + taskDuration(r.Task) + locked
-		text := prefix + ansi.Truncate(clean(label), max(1, w-ansi.StringWidth(prefix)-ansi.StringWidth(tail)-2), "…") + tail
-		all = append(all, selectedLine(text, i == v.Index, w))
+	all, index := m.taskDisplayRows(w)
+	start := max(0, index-h+1)
+	var lines []string
+	for _, row := range all[min(start, len(all)):min(len(all), start+h)] {
+		lines = append(lines, row.Text)
 	}
-	start := max(0, selected-h+1)
-	return all[start:min(len(all), start+h)]
+	return lines
 }
+
 func (m *model) detailLines(w, h int) []string {
 	if w <= 0 || h <= 0 {
 		return nil
@@ -421,35 +412,34 @@ func (m *model) detailLines(w, h int) []string {
 	return wrapped[start:min(len(wrapped), start+h)]
 }
 func (m *model) logView(w, h int) string {
-	title := fmt.Sprintf("%s / #%d · Log", m.log.Connection.DisplayName(), m.log.Task.ID)
-	if m.log.Following {
-		title += " · following"
-	}
-	if !m.log.AutoScroll {
-		title += " · scroll paused"
-	}
-	if m.log.Done {
-		title += " · stream ended"
-	}
-	lines := m.logLines()
-	capacity := max(1, h-2)
-	start := clamp(m.log.Offset, 0, max(0, len(lines)-1))
-	if m.log.AutoScroll {
-		start = max(0, len(lines)-capacity)
-	}
-	visible := append([]string(nil), lines[start:min(len(lines), start+capacity)]...)
-	if m.log.Err != "" {
-		visible = append([]string{"Log error: " + clean(m.log.Err)}, visible...)
-	}
-	if len(m.log.Text) == 0 && !m.log.Done {
-		visible = []string{"Loading log…"}
-	}
-	return frame(title, visible, w, h, true)
+	title := fmt.Sprintf("%s / #%d · %s", m.log.Connection.DisplayName(), m.log.Task.ID, m.log.Task.State())
+	return frame(title, m.sessionLines(m.log, w-2, h-2), w, h, true)
 }
+
 func (m *model) overlayView(w, h int) string {
 	var lines []string
 	title := ""
 	switch m.overlay {
+	case "log-settings":
+		title = "Log collection mode / frequency"
+		all := m.logSettingsLines(w - 2)
+		start := max(0, m.menuIndex-max(1, h-5)+1)
+		lines = append(lines, all[:min(3, len(all))]...)
+		if len(all) > 3 {
+			lines = append(lines, all[min(len(all), 3+start):]...)
+		}
+	case "upgrade-loading":
+		title = "Check upgrade"
+		lines = []string{"Inspecting versions, installation ownership and target…", "Esc closes this check; no upgrade has started."}
+	case "upgrade-review":
+		title = "Review upgrade · default No"
+		if m.upgrade != nil {
+			lines = m.upgrade.Lines
+		}
+		lines = append(lines, "", "y apply · Enter / n / Esc cancel")
+	case "upgrade-running":
+		title = "Upgrade in progress"
+		lines = []string{"The reviewed operation is running.", "Esc returns to the dashboard; progress remains in status.", "Ctrl+C cancels waiting; completed steps are not rolled back."}
 	case "actions":
 		title = "Actions"
 		lines = append(lines, m.input.View(), "")
@@ -480,7 +470,7 @@ func (m *model) overlayView(w, h int) string {
 			if a.Request.Operation == "parallel" {
 				lines = append(lines, fmt.Sprintf("Parallel tasks: %d", a.Request.Parallel))
 			}
-			lines = append(lines, "", a.Consequence, "", "Enter apply · Esc cancel")
+			lines = append(lines, "", a.Consequence, "", "y apply · Enter / n / Esc cancel (default No)")
 		}
 	case "connections":
 		title = "Connections · a add · e edit · t test · A authenticate · d remove"
@@ -518,17 +508,26 @@ func (m *model) overlayView(w, h int) string {
 				lines = append(lines, clean(m.events[i]))
 			}
 		}
+	case "task-info":
+		title = "Task details · snapshot at opening"
+		lines = m.taskInfoLines()
 	case "help":
 		title = "Help · Esc returns to the same selection"
-		lines = []string{"NAVIGATION", "↑↓ or j/k    Select / scroll", "Tab / Shift+Tab or h/l    Move pane focus", "Home / gg    First row; End / G    Last row", "1 Tasks; 2 Groups; Enter group    Show its tasks", "/    Live filter; Enter accepts; Esc clears", "Space    Select tasks on one connection; Esc clears", "", "CURRENT ACTIONS"}
+		logs := []string{"LOGS / MONITOR", "PgUp/PgDn · Ctrl+U/D    Full / half-page scroll", "PgUp at the top    Load older tail (up to 10,000 lines)", "L    Live / Polling / Manual; custom polling interval", "Space    Pause / resume collection; r refresh once", "f    Start live / toggle autoscroll; G return to tail", "/    Search; n/N next/previous match", "y    Copy loaded plain log; Y copy failure report", "o    Open complete log in an external pager", "i    Task metadata and detected progress source", "e    Edit; R restart as new; I restart in place (review)", "Esc    Return; ? help; m toggle mouse", "", "MONITOR", "Space on task rows, then W    Add selected tasks", "Tab/Shift+Tab    Focus tile; [/] previous/next page", "Enter    Expand tile; a add watches; x remove watch", "Polling replaces the tail; scrolling/search freezes it.", "G resumes polling; collection pause is independent.", "Hidden pages stop log reads. Watch preferences persist."}
+		lines = []string{"NAVIGATION", "↑↓ or j/k    Select / scroll", "Tab / Shift+Tab or h/l    Move pane focus", "Home / gg    First row; End / G    Last row", "0 Scope · 1 Tasks · 2 Groups · 3 Detail/log · 4 Monitor", "Enter group    Show its tasks", "/    Live filter; Enter accepts; Esc clears", "Space    Select tasks on one connection; Esc clears", "", "CURRENT ACTIONS"}
 		for _, a := range m.actions() {
 			if a.Key != "" {
 				lines = append(lines, fmt.Sprintf("%-10s %s", a.Key, a.Label))
 			}
 		}
-		lines = append(lines, ":          Search all applicable actions", "", "FORMS", "Ctrl+S    Review, then submit; Esc Back; Ctrl+C cancel", "Ctrl+O    Advanced fields; Ctrl+G group picker", "Ctrl+D    Dependency picker; Ctrl+L connection picker", "Ctrl+T    Test a connection draft without saving", "", "LOGS", "F/f    Start follow / toggle autoscroll", "/    Search; n/N next/previous; y copy buffer", "G    Resume autoscroll; Esc return", "", "Scope and refresh preserve task identity.", "Stale snapshots keep their own error and observation time.", "Native add requires its configured SSH submission companion.", "Dependencies require every parent to succeed.", "Group progress counts retained finished tasks, including failures.", "ETA estimates use observed task durations, not job progress.")
+		lines = append(lines, ":          Search all applicable actions", "", "FORMS", "Ctrl+S    Review, then submit; Esc Back; Ctrl+C cancel", "Edit and destructive reviews: y apply; Enter/n/Esc No", "Ctrl+O    Advanced fields; Ctrl+G group picker", "Ctrl+D    Dependency picker; Ctrl+L connection picker", "Ctrl+T    Test a connection draft without saving", "", "Scope and refresh preserve task identity.", "Stale snapshots keep their own error and observation time.", "Dependencies require every parent to succeed.", "Queue progress counts retained finished tasks, including failures.", "Job progress is shown only when detected in task output.")
+		if m.log.Open || m.monitor || m.focus == 2 {
+			lines = append(append(logs, ""), lines...)
+		} else {
+			lines = append(append(lines, ""), logs...)
+		}
 	}
-	if m.overlay == "confirm" || m.overlay == "events" || m.overlay == "help" {
+	if m.overlay == "confirm" || m.overlay == "events" || m.overlay == "help" || m.overlay == "task-info" || m.overlay == "upgrade-review" {
 		var wrapped []string
 		for _, line := range lines {
 			wrapped = append(wrapped, strings.Split(ansi.Wrap(clean(line), max(1, w-2), ""), "\n")...)
@@ -541,41 +540,33 @@ func (m *model) overlayView(w, h int) string {
 }
 func (m *model) footer() string {
 	if m.formUnknown {
-		return "Outcome unknown · Esc returns without submitting again"
+		return "Outcome unknown · Esc returns without another submission"
 	}
 	if m.formPending {
-		return "Applying to the reviewed connection · Ctrl+C cancel waiting"
+		return "Applying · Ctrl+C cancels waiting; accepted effects remain"
+	}
+	if m.editForm != nil {
+		return "Ctrl+S review · y apply / Enter No · Ctrl+O options · Esc back"
 	}
 	if m.taskForm != nil || m.connectionForm != nil {
 		return "Ctrl+S review / submit · Ctrl+O advanced · Esc back · Ctrl+C cancel"
 	}
-	if m.overlay == "actions" {
-		return "Type to search · ↑↓ select · Enter act · Esc back"
-	}
-	if m.overlay == "confirm" {
-		return "↑↓ scroll review · Enter apply · Esc cancel"
-	}
-	if m.overlay != "" {
-		return "↑↓/jk select · Enter open · Esc back"
-	}
 	if m.inputMode != "" {
-		return "Enter accept · Esc clear / cancel · printable keys type text"
+		return "Enter accept · Esc cancel · printable keys type text"
 	}
-	if m.log.Open {
-		return "↑↓/jk scroll · f follow · / search · n/N match · G end · y copy · Esc back"
+	var buttons []string
+	for _, b := range m.footerButtons() {
+		buttons = append(buttons, "["+b.Label+"]")
 	}
-	var hints []string
-	for _, id := range []string{"add", "log", "connections", "refresh", "help"} {
-		for _, a := range m.actions() {
-			if a.ID == id && a.Key != "" {
-				label := a.Label
-				if id == "connections" {
-					label = "Connections"
-				}
-				hints = append(hints, a.Key+" "+label)
-				break
-			}
-		}
+	suffix := " · q quit · m mouse"
+	if m.overlay == "confirm" || m.overlay == "upgrade-review" {
+		suffix = " · y Yes · Enter/n/Esc No"
+	} else if m.log.Open {
+		suffix = " · PgUp/Dn · Ctrl+U/D · / search · G tail"
+	} else if m.monitor {
+		suffix = " · [/] page · Tab tile · L mode"
+	} else if m.overlay != "" {
+		suffix = " · ↑↓ select · Esc back"
 	}
-	return strings.Join(hints, " · ") + " · : Actions · q Quit"
+	return strings.Join(buttons, " ") + suffix
 }

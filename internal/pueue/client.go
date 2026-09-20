@@ -2,7 +2,6 @@ package pueue
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -26,27 +25,15 @@ func (c *Client) Snapshot(ctx context.Context, conn core.Connection) (core.Snaps
 }
 
 func (c *Client) Log(ctx context.Context, conn core.Connection, id, lines int) (string, error) {
-	if id < 0 || lines < 1 {
-		return "", fmt.Errorf("task ID must be nonnegative and line count positive")
-	}
-	data, err := c.run(ctx, conn, []string{"log", strconv.Itoa(id), "--json", "--lines", strconv.Itoa(lines)}, false, false)
+	entries, err := c.Logs(ctx, conn, []int{id}, lines)
 	if err != nil {
 		return "", err
 	}
-	var entries map[string]struct {
-		Output string `json:"output"`
+	result := entries[id]
+	if result.Error != "" {
+		return "", &Error{Kind: "log-unavailable", Detail: result.Error}
 	}
-	if err = json.Unmarshal(data, &entries); err != nil {
-		return "", fmt.Errorf("invalid Pueue log JSON: %w", err)
-	}
-	entry, ok := entries[strconv.Itoa(id)]
-	if !ok {
-		return "", &Error{Kind: "task-missing", Detail: fmt.Sprintf("task #%d no longer exists", id)}
-	}
-	if strings.HasPrefix(strings.TrimSpace(entry.Output), "(Pueue error)") {
-		return "", &Error{Kind: "log-unavailable", Detail: "Task log is unavailable; the task may not have started or its log was removed"}
-	}
-	return entry.Output, nil
+	return result.Output, nil
 }
 
 type ProbeResult struct {
@@ -124,6 +111,18 @@ func ArgsFor(req core.Request) ([]string, error) {
 			args = append(args, "--immediate")
 		}
 		return append(args, "--", a.Command), nil
+	case "edit":
+		return append([]string{"edit"}, ids...), nil
+	case "edit-restart", "stop-edit-restart":
+		mode := "--not-in-place"
+		if req.InPlace {
+			mode = "--in-place"
+		}
+		return append([]string{"restart", mode, "--edit", "--stashed"}, ids...), nil
+	case "recover-stash":
+		return append([]string{"stash"}, ids...), nil
+	case "clear-group":
+		return []string{"pause", "--wait", "--group=" + req.Group}, nil
 	case "restart", "restart-failed":
 		args := []string{"restart", "--not-in-place"}
 		if req.InPlace {
@@ -174,6 +173,19 @@ func validateRequest(req core.Request) error {
 		}
 	}
 	switch req.Operation {
+	case "edit", "edit-restart", "stop-edit-restart":
+		if len(req.IDs) != 1 || req.Edit == nil {
+			return fmt.Errorf("edit requires one task and an edit draft")
+		}
+		return core.ValidateEdit(*req.Edit)
+	case "recover-stash":
+		if len(req.IDs) != 1 {
+			return fmt.Errorf("recover-stash requires one task")
+		}
+	case "clear-group":
+		if strings.TrimSpace(req.Group) == "" {
+			return fmt.Errorf("clear-group requires a group")
+		}
 	case "add":
 		if req.Add == nil {
 			return fmt.Errorf("add request is missing")
@@ -249,6 +261,34 @@ func (c *Client) Preview(conn core.Connection, req core.Request) (core.Plan, err
 		plan.Display = shellJoin(append(display, args...))
 	}
 	switch req.Operation {
+	case "edit", "edit-restart", "stop-edit-restart":
+		e := req.Edit
+		display := []string{"lazypueue", "--connection", conn.ID, "edit", strconv.Itoa(req.IDs[0]), "--command=" + e.Command, "--directory=" + e.Directory, "--label=" + e.Label, "--priority=" + strconv.Itoa(e.Priority), "--stashed=" + strconv.FormatBool(e.Stashed)}
+		if req.InPlace {
+			display = append(display, "--in-place")
+		}
+		plan.Display = shellJoin(display)
+		plan.Consequences = append(plan.Consequences, "Applies the reviewed command, directory, label and priority; preserves the existing environment and group.")
+		if req.Operation == "stop-edit-restart" {
+			plan.Consequences = append(plan.Consequences, "Stops the current process before editing and retrying; cancellation cannot undo that stop.")
+		}
+		if req.Operation != "edit" {
+			if req.InPlace {
+				plan.Consequences = append(plan.Consequences, "Reuses the task ID and overwrites its log on the next run.")
+			} else {
+				plan.Consequences = append(plan.Consequences, "Creates a new task, keeps the original log and clears dependencies.")
+			}
+		}
+		if req.Edit.Stashed {
+			plan.Consequences = append(plan.Consequences, "Leaves the edited task stashed; it will not run automatically.")
+		} else {
+			plan.Consequences = append(plan.Consequences, "Enqueues the edited task after saving; it may start when its group has capacity.")
+		}
+	case "recover-stash":
+		plan.Consequences = append(plan.Consequences, "Releases this edit lock to stash; the original edit session will no longer be able to save.")
+	case "clear-group":
+		plan.Display = "lazypueue --connection " + shellQuote(conn.ID) + " group clear " + shellQuote(req.Group)
+		plan.Consequences = append(plan.Consequences, "Stops and removes only the reviewed tasks and their logs; no reset or dependency cascade.", "Temporarily pauses scheduling; restores its previous state on success. Failure leaves it paused.")
 	case "restart", "restart-failed":
 		if req.InPlace {
 			plan.Consequences = append(plan.Consequences, "Reuses task IDs and overwrites their existing logs.")
@@ -306,6 +346,12 @@ func (c *Client) Execute(ctx context.Context, conn core.Connection, req core.Req
 	}
 	if req.Operation == "add" {
 		return c.add(ctx, conn, req, snapshot)
+	}
+	switch req.Operation {
+	case "edit", "edit-restart", "stop-edit-restart", "recover-stash":
+		return c.editTask(ctx, conn, req, snapshot)
+	case "clear-group":
+		return c.clearGroup(ctx, conn, req, snapshot)
 	}
 	groups := map[string]bool{}
 	for _, g := range snapshot.Groups {
@@ -387,8 +433,24 @@ func (c *Client) Execute(ctx context.Context, conn core.Connection, req core.Req
 		}
 		return result, err
 	}
-	for _, id := range req.IDs {
-		result.Outcomes = append(result.Outcomes, core.Outcome{ID: id})
+	if req.Operation == "remove" || req.Operation == "clean" {
+		guards := map[int]time.Time{}
+		for _, id := range req.IDs {
+			guards[id] = tasks[id].CreatedAt
+		}
+		result.Outcomes, err = c.reconcileRemoval(ctx, conn, req.IDs, guards)
+		if err != nil {
+			result.Unknown = true
+			return result, &Error{Kind: "unknown-outcome", Detail: "Removal submitted but could not be reconciled; inspect the queue", Unknown: true, Cause: err}
+		}
+		if err = outcomeError(result.Outcomes); err != nil {
+			result.Message = err.Error()
+			return result, err
+		}
+	} else {
+		for _, id := range req.IDs {
+			result.Outcomes = append(result.Outcomes, core.Outcome{ID: id})
+		}
 	}
 	result.Message = "Request accepted; refreshing daemon state"
 	return result, nil

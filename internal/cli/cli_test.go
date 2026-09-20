@@ -204,7 +204,7 @@ func TestMutationConfirmationAndRestartSemantics(t *testing.T) {
 	}
 	t.Run("new ID restart", func(t *testing.T) {
 		f := setup(t)
-		_, _, err := invoke(t, f, false, "restart", "3")
+		_, _, err := invoke(t, f, false, "restart", "3", "--yes")
 		if err != nil || f.request.InPlace || f.writes != 1 {
 			t.Fatalf("restart: %v %+v", err, f)
 		}

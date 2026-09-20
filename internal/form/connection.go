@@ -28,6 +28,8 @@ type ConnectionModel struct {
 	testResult                         string
 	chooser                            *picker
 	reviewOffset                       int
+	width, height                      int
+	pressed                            *formPress
 }
 type connectionTestMsg struct {
 	owner      *ConnectionModel
@@ -46,7 +48,7 @@ func NewConnection(initial core.Connection, editing bool, backend core.Backend) 
 	if initial.Port != 0 {
 		port = strconv.Itoa(initial.Port)
 	}
-	m := &ConnectionModel{Connection: initial, editing: editing, backend: backend}
+	m := &ConnectionModel{Connection: initial, editing: editing, backend: backend, width: 80, height: 24}
 	for _, v := range []string{initial.ID, initial.Name, initial.Kind, initial.SSHHost, initial.Binary, initial.ConfigPath, initial.Profile, initial.Host, port, initial.CertPath, initial.SecretPath, initial.SSHBinary, initial.SSHConfig, initial.SSHProfile, initial.SocketPath} {
 		m.fields = append(m.fields, input(v))
 	}
@@ -57,6 +59,7 @@ func NewConnection(initial core.Connection, editing bool, backend core.Backend) 
 }
 func (m *ConnectionModel) Init() tea.Cmd { return m.fields[m.focus].Focus() }
 func (m *ConnectionModel) Close() {
+	m.pressed = nil
 	m.generation++
 	if m.cancel != nil {
 		m.cancel()
@@ -94,6 +97,9 @@ func (m *ConnectionModel) Update(msg tea.Msg) (*ConnectionModel, tea.Cmd) {
 	if m.Done || m.Cancelled {
 		return m, nil
 	}
+	if cmd, handled := m.mouseUpdate(msg); handled {
+		return m, cmd
+	}
 	switch v := msg.(type) {
 	case connectionTestMsg:
 		if v.owner != m || v.generation != m.generation {
@@ -108,11 +114,14 @@ func (m *ConnectionModel) Update(msg tea.Msg) (*ConnectionModel, tea.Cmd) {
 		}
 		return m, nil
 	case tea.WindowSizeMsg:
+		m.width, m.height = max(1, v.Width), max(1, v.Height)
+		m.pressed = nil
 		for i := range m.fields {
 			m.fields[i].SetWidth(max(1, v.Width-6))
 		}
 		return m, nil
 	case tea.KeyPressMsg:
+		m.pressed = nil
 		if v.IsRepeat && v.String() == "ctrl+s" {
 			return m, nil
 		}
@@ -232,7 +241,7 @@ func (m *ConnectionModel) Update(msg tea.Msg) (*ConnectionModel, tea.Cmd) {
 }
 func (m *ConnectionModel) draft() (core.Connection, error) {
 	v := func(i int) string { return strings.TrimSpace(m.fields[i].Value()) }
-	c := core.Connection{ID: v(0), Name: v(1), Kind: v(2), Binary: v(4), ConfigPath: v(5), Profile: v(6)}
+	c := core.Connection{ID: v(0), Name: v(1), Kind: v(2), Binary: v(4), ConfigPath: v(5), Profile: v(6), Logs: m.Connection.Logs}
 	switch c.Kind {
 	case "local":
 		c.SocketPath = v(14)
@@ -330,22 +339,8 @@ func (m *ConnectionModel) View(w, h int) string {
 			body = append(body, fmt.Sprintf("Port: %d", c.Port))
 		}
 		body = append(body, "Save this connection in lazypueue settings.", "Referenced Pueue configuration will remain unchanged.")
-		return render("Review connection", wrapLines(body, w), m.reviewOffset, w, h, status, "Ctrl+S save · Esc edit · ↑↓ scroll · Ctrl+C cancel")
+		return render("Review connection", wrapLines(body, w), m.reviewOffset, w, h, status, m.formFooter(w, h).text)
 	}
-	var body []string
-	focusLine := 0
-	for _, i := range m.visible() {
-		mark := "  "
-		if i == m.focus {
-			mark = "* "
-			focusLine = len(body)
-		}
-		body = append(body, mark+connectionLabels[i])
-		if i == 0 && m.editing {
-			body = append(body, "  "+safe(m.fields[i].Value()))
-		} else {
-			body = append(body, m.fields[i].View())
-		}
-	}
-	return render("Connection configuration", body, focusLine, w, h, status, "Tab next · Ctrl+P kind · Ctrl+O advanced · Ctrl+T test · Ctrl+S review · Esc cancel")
+	body, focusLine, _ := m.body()
+	return render("Connection configuration", body, focusLine, w, h, status, m.formFooter(w, h).text)
 }
