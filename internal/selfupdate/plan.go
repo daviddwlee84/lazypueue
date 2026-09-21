@@ -68,7 +68,7 @@ func check(ctx context.Context, opts runOptions) (Plan, error) {
 	opts.inspect = func() (Installation, error) { return installation, nil }
 	opts.latest = func(context.Context) (Release, error) { return release, nil }
 	plan.Result, err = run(ctx, Request{Check: true}, io.Discard, opts)
-	plan.Review = []string{"Executable: " + installation.Executable, "Destination: " + installation.ResolvedPath, "Build: " + installation.BuildKind, "Release: " + release.Version, "Build the exact source release with the installed Go command and its configured toolchain policy.", "Replace only the verified resolved executable; existing invocations continue until exited."}
+	plan.Review = []string{"Executable: " + installation.Executable, "Destination: " + installation.ResolvedPath, "Build: " + installation.BuildKind, "Release: " + release.Version, "Use the inspected installation method: verified archive or exact source build.", "Replace only the verified resolved executable; existing invocations continue until exited."}
 	if plan.Reason != "" {
 		plan.Review = append(plan.Review, plan.Reason)
 	}

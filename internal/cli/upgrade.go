@@ -12,7 +12,7 @@ import (
 
 func (a *app) upgradeCommand() *cobra.Command {
 	var check, force bool
-	cmd := &cobra.Command{Use: "upgrade", Short: "Check or upgrade this lazypueue executable from a stable source release", Args: noArgs}
+	cmd := &cobra.Command{Use: "upgrade", Short: "Check or upgrade this lazypueue executable from a stable release", Args: noArgs}
 	cmd.Flags().BoolVar(&check, "check", false, "Inspect the running binary and stable release without replacing files")
 	cmd.Flags().BoolVar(&force, "force", false, "Explicitly replace a recognized development build (never bypass package ownership)")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {

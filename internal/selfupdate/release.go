@@ -64,12 +64,19 @@ func fetchLatestRelease(ctx context.Context, client *http.Client, endpoint strin
 		return Release{}, errors.New("GitHub release response exceeded the size limit")
 	}
 	var data struct {
-		Tag        string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
+		Tag    string `json:"tag_name"`
+		Assets []struct {
+			Name string `json:"name"`
+		} `json:"assets"`
+		Draft      bool `json:"draft"`
+		Prerelease bool `json:"prerelease"`
 	}
 	if err := json.Unmarshal(body, &data); err != nil || data.Draft || data.Prerelease || !StableVersion(data.Tag) {
 		return Release{}, errors.New("GitHub did not return a valid stable lazypueue release")
 	}
-	return Release{Version: data.Tag, URL: "https://github.com/daviddwlee84/lazypueue/releases/tag/" + data.Tag}, nil
+	names := make([]string, 0, len(data.Assets))
+	for _, asset := range data.Assets {
+		names = append(names, asset.Name)
+	}
+	return Release{Assets: names, Version: data.Tag, URL: "https://github.com/daviddwlee84/lazypueue/releases/tag/" + data.Tag}, nil
 }

@@ -11,9 +11,9 @@ lazypueue upgrade --yes               # explicit noninteractive approval
 lazypueue upgrade --force --yes       # replace a recognized development build
 ```
 
-The self-updater requires a formal stable GitHub release and builds its exact tag with the installed Go command. Until a release exists, check reports `source-unavailable`; it does not substitute the main branch or change the checkout. Version output uses an injected build version, then Go's embedded module version, then `dev`.
+The self-updater requires a formal stable GitHub release. Standalone release archives download the exact platform archive and verify checksums before candidate inspection and replacement. Source installations build its exact tag with the installed Go command. Until a release exists, check reports `source-unavailable`; it does not substitute the main branch or change the checkout. Version output uses an injected build version, then Go's embedded module version, then `dev`.
 
-The source package is `github.com/daviddwlee84/lazypueue` at the repository root. No release archive pipeline is assumed. Go keeps the user's `GOTOOLCHAIN` policy, which may download a compatible toolchain. A missing Go command is reported rather than installed automatically.
+The source package is `github.com/daviddwlee84/lazypueue` at the repository root. Release archives cover macOS/Linux amd64/arm64. Archive updates require no Go installation; an absent archive, failed download, or checksum mismatch never falls back to source. Go keeps the user's `GOTOOLCHAIN` policy, which may download a compatible toolchain. A missing Go command is reported rather than installed automatically.
 
 Inspection separates build provenance from package ownership. Homebrew, Nix, and mise installations receive manager guidance; unknown binaries are preserved. Recognized local/development builds need `--force`. That flag never bypasses ownership, executable identity, or candidate verification.
 

@@ -4,6 +4,19 @@ A Go terminal dashboard for [Pueue](https://github.com/Nukesor/pueue): see queue
 
 The interaction follows [Pueue Raycast Extension](https://github.com/daviddwlee84/Pueue-Raycast-Extension), with a compact overview inspired by btop and keyboard navigation like the other lazy tools. It uses the installed Pueue CLI and your existing daemons.
 
+## Prebuilt releases
+
+Download the archive for your macOS/Linux amd64/arm64 platform from
+[GitHub Releases](https://github.com/daviddwlee84/lazypueue/releases).
+Verify it against `checksums.txt` before extracting. Archives contain the
+`lazypueue` executable, MIT license, and Bash/Zsh completions. Go is only needed
+for source installation. Runtime backends remain separate prerequisites.
+
+Standalone archive installations use verified release archives for `upgrade`;
+source installations retain exact-tag Go builds. Homebrew/Nix/mise installations
+must use their owning package manager. Upgrades never install a missing Go toolchain
+or fall back to source after a download/checksum failure.
+
 ## Run
 
 Requires Go 1.25 or newer to build and Pueue 4.x on each machine that owns a queue. SSH connections use your system `ssh` and SSH configuration.
@@ -158,7 +171,7 @@ lazypueue backend upgrade --connection lab --check
 lazypueue backend upgrade --connection lab --yes
 ```
 
-Self-upgrade builds a captured stable source release and atomically replaces the same resolved executable. Development copies need `--force`; package-owned or unknown copies are preserved. With no published stable release, check reports `source-unavailable`.
+Self-upgrade downloads a checksummed platform archive for release-archive installations, or builds a captured stable source release for Go installations, then atomically replaces the same resolved executable. Development copies need `--force`; package-owned or unknown copies are preserved. With no published stable release, check reports `source-unavailable`.
 
 Backend upgrades support verified Homebrew/Cargo ownership and a matching Homebrew or systemd user service. They require an idle queue, preserve paused groups, record every maintenance phase, and refuse active work even with `--yes`. Native connections require an SSH companion for administration. Read [upgrade behavior and recovery](docs/upgrades.md) before maintaining a daemon.
 
