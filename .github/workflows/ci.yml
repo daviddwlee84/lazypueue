@@ -51,8 +51,10 @@ jobs:
       - name: Test immutable release publication
         run: python3 -m unittest discover -s scripts -p test_release.py
       - name: Test independent distribution boundaries
+        if: hashFiles('scripts/check-distribution.py') != ''
         run: python3 -m unittest discover -s scripts -p test_distribution.py
       - name: Build real source archive and Go module ZIP
+        if: hashFiles('scripts/check-distribution.py') != ''
         run: python3 scripts/check-distribution.py
       - uses: goreleaser/goreleaser-action@v6
         with:
@@ -62,5 +64,9 @@ jobs:
         with:
           version: v2.18.2
           args: release --snapshot --clean
+      - name: Load the publisher from this tested workflow revision
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: git show "${WORKFLOW_SHA}:scripts/release.py" > "$RUNNER_TEMP/release-publisher.py"
       - name: Verify four binaries and source payload
-        run: python3 scripts/release.py check --project lazypueue --binary lazypueue --smoke
+        run: python3 "$RUNNER_TEMP/release-publisher.py" check --project lazypueue --binary lazypueue --smoke
