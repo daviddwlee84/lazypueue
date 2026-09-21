@@ -34,3 +34,33 @@ jobs:
       - run: python -m pip install pyte==0.8.2
       - run: python3 scripts/form_pty_smoke.py --binary ./lazypueue
       - run: python3 scripts/pty_smoke.py --binary ./lazypueue
+
+  release-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test immutable release publication
+        run: python3 -m unittest discover -s scripts -p test_release.py
+      - name: Test independent distribution boundaries
+        run: python3 -m unittest discover -s scripts -p test_distribution.py
+      - name: Build real source archive and Go module ZIP
+        run: python3 scripts/check-distribution.py
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.2
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.2
+          args: release --snapshot --clean
+      - name: Verify four binaries and source payload
+        run: python3 scripts/release.py check --project lazypueue --binary lazypueue --smoke

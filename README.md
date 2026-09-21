@@ -189,3 +189,19 @@ CLI, dashboard, and forms use the same backend validation and operations. Tests 
 See [verification](docs/verification.md) for observed results, disposable-daemon integration tests, and real PTY scripts. The shared-form PTY test uses only Python's standard library; the dashboard screen checks require `pyte==0.8.2`.
 
 Other references: [PueueWrapper](https://github.com/daviddwlee84/PueueWrapper), [lazymlflow](https://github.com/daviddwlee84/lazymlflow), and [lazyclash](https://github.com/daviddwlee84/lazyclash).
+
+### Source distribution size
+
+Release assets include a rootless source archive (`lazypueue_<version>_source.tar.gz`)
+and its checksum. Source archives omit SpecStory history and agent plan folders
+using `.gitattributes`; Go module downloads omit the same evidence through nested
+`go.mod` boundary markers. Build inputs, embedded resources, tests, licenses, and
+skills remain available. Full Git clones retain development history.
+
+CI builds and exercises both a real Git archive and an independently generated Go
+module ZIP using the official `golang.org/x/mod` implementation. To run the check
+from a committed revision:
+
+```sh
+python3 scripts/check-distribution.py
+```

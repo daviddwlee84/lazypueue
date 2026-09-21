@@ -1,0 +1,7 @@
+{
+  "main": ".",
+  "version_symbol": "main.version",
+  "required": [
+    "main.go"
+  ]
+}
