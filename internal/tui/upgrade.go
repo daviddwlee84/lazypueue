@@ -225,7 +225,11 @@ func (m *model) upgradeKey(k tea.KeyPressMsg) tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 		r, e := selfupdate.Apply(ctx, p, selfupdate.ApplyOptions{}, io.Discard)
-		return upgradeAppliedMsg{Generation: gen, Message: fmt.Sprintf("%s · %s · %s; start a new invocation to use the updated executable", r.Status, r.LatestVersion, r.Installation.ResolvedPath), Err: e}
+		message := r.Message
+		if message == "" {
+			message = fmt.Sprintf("%s · %s · %s; start a new invocation to use the updated executable", r.Status, r.LatestVersion, r.Installation.ResolvedPath)
+		}
+		return upgradeAppliedMsg{Generation: gen, Message: message, Err: e}
 	}
 }
 func (m *model) acceptUpgradeApply(v upgradeAppliedMsg) tea.Cmd {

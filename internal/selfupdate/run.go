@@ -13,13 +13,14 @@ import (
 	"time"
 )
 
-// Run inspects this process's executable and optionally replaces that same
-// executable with a verified, pinned stable release. It does not load settings.
+// Run inspects this process's executable and applies its verified manager or
+// pinned stable release strategy. It does not load settings.
 func Run(ctx context.Context, req Request, progress io.Writer) (Result, error) {
-	return run(ctx, req, progress, runOptions{
-		inspect: Inspect, latest: latestRelease, lookPath: exec.LookPath,
-		build: buildRelease, inspectCandidate: InspectPath, version: candidateVersion,
-	})
+	plan, err := Check(ctx)
+	if err != nil || req.Check {
+		return plan.Result, err
+	}
+	return Apply(ctx, plan, ApplyOptions{Force: req.Force}, progress)
 }
 
 type runOptions struct {
@@ -30,6 +31,7 @@ type runOptions struct {
 	inspectCandidate func(string) (Installation, error)
 	version          func(context.Context, string) (string, error)
 	download         func(context.Context, Release, string) error
+	managerRun       func(context.Context, string, []string, io.Writer) (string, error)
 }
 
 func run(ctx context.Context, req Request, progress io.Writer, opts runOptions) (Result, error) {
@@ -65,6 +67,7 @@ func run(ctx context.Context, req Request, progress io.Writer, opts runOptions) 
 	if StableVersion(installation.Version) {
 		comparison, _ := CompareVersions(release.Version, installation.Version)
 		result.UpdateAvailable = comparison > 0
+		result.UpdateAvailableKnown = true
 	}
 	goPath, reason := upgradePrerequisites(installation, req.Force, opts.lookPath)
 	if installation.Method == "release-asset" && reason == "" {

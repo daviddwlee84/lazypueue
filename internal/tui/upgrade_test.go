@@ -187,3 +187,40 @@ func TestInvalidUpgradeCheckCannotReachApply(t *testing.T) {
 		t.Fatal("invalid check was accepted")
 	}
 }
+
+func TestManagedSelfUpgradeUsesReviewAndCancellationWithoutBackendLease(t *testing.T) {
+	for _, action := range []string{"enter", "n", "esc", "y"} {
+		t.Run(action, func(t *testing.T) {
+			m, _ := fixture(t)
+			cancelled := false
+			m.upgrade = &upgradeState{Generation: 4, Cancel: func() { cancelled = true }}
+			m.overlay = "upgrade-loading"
+			plan := selfupdate.Plan{Result: selfupdate.Result{CanUpgrade: true, ManagerCommand: []string{"/owned/brew", "upgrade", "acme/tools/lazypueue"}, Installation: selfupdate.Installation{Manager: "homebrew", Method: "package-manager"}}, Review: []string{"Command: /owned/brew upgrade acme/tools/lazypueue", "Verify after upgrade: /owned/opt/lazypueue/bin/lazypueue"}}
+			m.acceptUpgradeCheck(upgradeCheckedMsg{Generation: 4, Self: &plan})
+			if !strings.Contains(strings.Join(m.upgrade.Lines, "\n"), "acme/tools/lazypueue") || m.overlay != "upgrade-review" {
+				t.Fatal("manager review missing")
+			}
+			cmd := m.upgradeKey(key(action))
+			if action != "y" {
+				if cmd != nil || m.upgrade != nil || !cancelled {
+					t.Fatal("default-no applied manager upgrade")
+				}
+				return
+			}
+			if cmd == nil || !m.upgrade.Applying || m.backendMaintenanceActive() || m.overlay != "upgrade-running" {
+				t.Fatal("approved manager update did not dispatch correctly")
+			}
+			cancelled = false
+			cancel := m.upgrade.Cancel
+			m.upgrade.Cancel = func() { cancelled = true; cancel() }
+			m.upgradeKey(key("ctrl+c"))
+			if !cancelled || !m.upgrade.Applying {
+				t.Fatal("cancel must wait for actual completion")
+			}
+			m.acceptUpgradeApply(upgradeAppliedMsg{Generation: 4, Message: "Homebrew kept lazypueue v1.0.0; its formula may lag GitHub releases."})
+			if m.upgrade.Applying || !strings.Contains(m.status, "may lag GitHub") {
+				t.Fatal("lost actual manager outcome", m.status)
+			}
+		})
+	}
+}

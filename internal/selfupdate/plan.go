@@ -7,9 +7,11 @@ import (
 	"os/exec"
 	"runtime/debug"
 	"strings"
+
+	"github.com/daviddwlee84/lazypueue/internal/brewupgrade"
 )
 
-// Plan binds the release and destination inspected before review. Its private
+// Plan binds the release or owning manager inspected before review. Its private
 // identity cannot be reconstructed from untrusted JSON or redirected via PATH.
 type Plan struct {
 	Result
@@ -17,6 +19,7 @@ type Plan struct {
 	original installationSnapshot
 	release  Release
 	checked  bool
+	brew     *brewupgrade.Plan
 }
 
 type ApplyOptions struct{ Force bool }
@@ -41,6 +44,9 @@ func defaultOptions() runOptions {
 func Check(ctx context.Context) (Plan, error) { return check(ctx, defaultOptions()) }
 func check(ctx context.Context, opts runOptions) (Plan, error) {
 	var plan Plan
+	if err := ctx.Err(); err != nil {
+		return plan, err
+	}
 	installation, err := opts.inspect()
 	if err != nil {
 		return plan, err
@@ -48,6 +54,10 @@ func check(ctx context.Context, opts runOptions) (Plan, error) {
 	plan.Installation = installation
 	plan.CurrentVersion = installation.Version
 	plan.checked = true
+	managed, err := checkManaged(ctx, plan, opts)
+	if err != nil || managed.Installation.Manager != "" {
+		return managed, err
+	}
 	if installation.IdentityValid && installation.Manager == "" {
 		plan.original, err = snapshotInstallation(installation)
 		if err != nil {
@@ -75,13 +85,22 @@ func check(ctx context.Context, opts runOptions) (Plan, error) {
 	return plan, err
 }
 
-// Apply uses the captured exact release; it never resolves latest a second time.
+// Apply delegates to the verified manager or uses the captured exact release;
+// source/archive updates never resolve latest a second time.
 func Apply(ctx context.Context, plan Plan, options ApplyOptions, progress io.Writer) (Result, error) {
 	return apply(ctx, plan, options, progress, defaultOptions())
 }
 func apply(ctx context.Context, plan Plan, options ApplyOptions, progress io.Writer, opts runOptions) (Result, error) {
 	if !plan.checked {
 		return plan.Result, errors.New("check this executable before applying an update")
+	}
+	if plan.brew != nil {
+		return applyManaged(ctx, plan, progress)
+	}
+	if plan.Installation.Manager != "" {
+		result := plan.Result
+		result.Status = "unsupported"
+		return result, errors.New(plan.Reason)
 	}
 	if plan.release.Version == "" {
 		return plan.Result, ErrSourceUnavailable

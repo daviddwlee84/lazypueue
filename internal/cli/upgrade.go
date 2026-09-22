@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/daviddwlee84/lazypueue/internal/core"
 	"github.com/daviddwlee84/lazypueue/internal/maintenance"
@@ -12,8 +13,8 @@ import (
 
 func (a *app) upgradeCommand() *cobra.Command {
 	var check, force bool
-	cmd := &cobra.Command{Use: "upgrade", Short: "Check or upgrade this lazypueue executable from a stable release", Args: noArgs}
-	cmd.Flags().BoolVar(&check, "check", false, "Inspect the running binary and stable release without replacing files")
+	cmd := &cobra.Command{Use: "upgrade", Short: "Check or upgrade lazypueue through its verified installation method", Args: noArgs}
+	cmd.Flags().BoolVar(&check, "check", false, "Inspect the running binary and upgrade method without changing files")
 	cmd.Flags().BoolVar(&force, "force", false, "Explicitly replace a recognized development build (never bypass package ownership)")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if err := a.commandOnly(); err != nil {
@@ -56,7 +57,11 @@ func (a *app) upgradeCommand() *cobra.Command {
 		if !plan.CanUpgrade && !forceDevelopment {
 			return fmt.Errorf("%s", plan.Reason)
 		}
-		if err := a.confirm(cmd, fmt.Sprintf("Replace %s with verified lazypueue %s", plan.Installation.ResolvedPath, plan.LatestVersion)); err != nil {
+		prompt := fmt.Sprintf("Replace %s with verified lazypueue %s", plan.Installation.ResolvedPath, plan.LatestVersion)
+		if len(plan.ManagerCommand) > 0 {
+			prompt = "Let Homebrew upgrade the inspected lazypueue formula: " + strings.Join(plan.ManagerCommand, " ")
+		}
+		if err := a.confirm(cmd, prompt); err != nil {
 			return err
 		}
 		progress := cmd.ErrOrStderr()
@@ -68,6 +73,8 @@ func (a *app) upgradeCommand() *cobra.Command {
 			if e := a.writeJSON(cmd, result); e != nil {
 				return e
 			}
+		} else if result.Message != "" {
+			fmt.Fprintln(cmd.OutOrStdout(), result.Message)
 		} else if result.Status != "" {
 			fmt.Fprintf(cmd.OutOrStdout(), "%s: %s (%s)\n", result.Status, result.LatestVersion, result.Installation.ResolvedPath)
 		}
@@ -80,6 +87,10 @@ func printSelfPlan(w io.Writer, p selfupdate.Plan) error {
 		if _, err := fmt.Fprintln(w, oneLine(line)); err != nil {
 			return err
 		}
+	}
+	if len(p.ManagerCommand) > 0 {
+		_, err := fmt.Fprintf(w, "Homebrew selects its available version during apply · Can apply: %t\n", p.CanUpgrade)
+		return err
 	}
 	_, err := fmt.Fprintf(w, "Update available: %t · Can apply: %t\n", p.UpdateAvailable, p.CanUpgrade)
 	return err

@@ -13,8 +13,9 @@ Verify it against `checksums.txt` before extracting. Archives contain the
 for source installation. Runtime backends remain separate prerequisites.
 
 Standalone archive installations use verified release archives for `upgrade`;
-source installations retain exact-tag Go builds. Homebrew/Nix/mise installations
-must use their owning package manager. Upgrades never install a missing Go toolchain
+source installations retain exact-tag Go builds. Verified Homebrew installations
+delegate to their owning `brew upgrade <formula>` after approval. Nix and mise
+installations receive instructions for their owning manager. Upgrades never install a missing Go toolchain
 or fall back to source after a download/checksum failure.
 
 ## Run
@@ -171,7 +172,7 @@ lazypueue backend upgrade --connection lab --check
 lazypueue backend upgrade --connection lab --yes
 ```
 
-Self-upgrade downloads a checksummed platform archive for release-archive installations, or builds a captured stable source release for Go installations, then atomically replaces the same resolved executable. Development copies need `--force`; package-owned or unknown copies are preserved. With no published stable release, check reports `source-unavailable`.
+Self-upgrade downloads a checksummed platform archive for release-archive installations, or builds a captured stable source release for Go installations, then atomically replaces the same resolved executable. Verified Homebrew installations delegate to the exact installed formula and report the version found through its stable `opt` path afterward; a manager no-op does not imply GitHub latest. Unmanaged development copies need `--force`; that flag never bypasses ownership or verification. Other package-owned or unknown copies receive guidance. Source/archive checks report `source-unavailable` when no stable release exists.
 
 Backend upgrades support verified Homebrew/Cargo ownership and a matching Homebrew or systemd user service. They require an idle queue, preserve paused groups, record every maintenance phase, and refuse active work even with `--yes`. Native connections require an SSH companion for administration. Read [upgrade behavior and recovery](docs/upgrades.md) before maintaining a daemon.
 

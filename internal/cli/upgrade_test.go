@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -98,5 +100,86 @@ func TestForceDoesNotPromptForPackageOwnedSelfUpdate(t *testing.T) {
 	root.SetArgs([]string{"upgrade", "--force"})
 	if err := root.ExecuteContext(context.Background()); err == nil || applied || strings.Contains(stderr.String(), "[y/N]") {
 		t.Fatalf("package-owned copy prompted/applied: %v %s", err, &stderr)
+	}
+}
+
+func TestManagedUpgradePreservesCheckApprovalAndJSON(t *testing.T) {
+	for _, mode := range []string{"check", "dry-run", "unapproved", "approved", "cancelled"} {
+		t.Run(mode, func(t *testing.T) {
+			f := setup(t)
+			var out, stderr bytes.Buffer
+			calls := 0
+			plan := selfupdate.Plan{Result: selfupdate.Result{CanUpgrade: true, CurrentVersion: "v1.0.0", ManagerCommand: []string{"/owned/brew", "upgrade", "acme/tools/lazypueue"}, Installation: selfupdate.Installation{Manager: "homebrew", Method: "package-manager", IdentityValid: true, Version: "v1.0.0"}}}
+			root := NewRoot(Options{Backend: f, Output: &out, ErrorOutput: &stderr, Input: strings.NewReader("yes\n"), IsTerminal: func() bool { return true }, SelfCheck: func(context.Context) (selfupdate.Plan, error) { return plan, nil }, SelfApply: func(ctx context.Context, p selfupdate.Plan, o selfupdate.ApplyOptions, progress io.Writer) (selfupdate.Result, error) {
+				calls++
+				if !o.Force || strings.Join(p.ManagerCommand, " ") != "/owned/brew upgrade acme/tools/lazypueue" {
+					t.Fatal("lost reviewed manager plan")
+				}
+				io.WriteString(progress, "raw manager progress")
+				r := p.Result
+				r.Status, r.InstalledVersion, r.Message = "managed-unchanged", "v1.0.0", "Homebrew kept v1.0.0; its formula may lag GitHub releases."
+				if mode == "cancelled" {
+					r.Status = "managed-failed"
+					return r, context.Canceled
+				}
+				return r, nil
+			}})
+			args := []string{"upgrade", "--json", "--force"}
+			switch mode {
+			case "check":
+				args = append(args, "--check")
+			case "dry-run":
+				args = append(args, "--dry-run")
+			case "approved", "cancelled":
+				args = append(args, "--yes")
+			}
+			root.SetArgs(args)
+			err := root.ExecuteContext(context.Background())
+			if mode == "unapproved" {
+				if ExitCode(err) != 2 || calls != 0 {
+					t.Fatalf("unapproved apply: calls=%d err=%v", calls, err)
+				}
+				return
+			}
+			if mode == "cancelled" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal("lost cancellation", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			var result map[string]any
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatalf("stdout not JSON: %s %v", &out, err)
+			}
+			if mode == "check" || mode == "dry-run" {
+				if calls != 0 {
+					t.Fatal("check upgraded")
+				}
+			} else if calls != 1 || result["installed_version"] != "v1.0.0" {
+				t.Fatalf("wrong result: %v calls=%d", result, calls)
+			}
+			if result["latest_version"] != nil || strings.Contains(out.String()+stderr.String(), "raw manager progress") || strings.Contains(stderr.String(), "[y/N]") || f.reads+f.writes != 0 {
+				t.Fatalf("managed JSON/check leaked or touched queue: %s %s", &out, &stderr)
+			}
+		})
+	}
+}
+
+func TestManagedTerminalPromptNamesExactCommandAndActualOutcome(t *testing.T) {
+	f := setup(t)
+	var out, stderr bytes.Buffer
+	root := NewRoot(Options{Backend: f, Output: &out, ErrorOutput: &stderr, Input: strings.NewReader("yes\n"), IsTerminal: func() bool { return true }, SelfCheck: func(context.Context) (selfupdate.Plan, error) {
+		return selfupdate.Plan{Result: selfupdate.Result{CanUpgrade: true, ManagerCommand: []string{"/owned/brew", "upgrade", "acme/tools/custom-name"}, Installation: selfupdate.Installation{Manager: "homebrew"}}}, nil
+	}, SelfApply: func(_ context.Context, _ selfupdate.Plan, _ selfupdate.ApplyOptions, progress io.Writer) (selfupdate.Result, error) {
+		io.WriteString(progress, "brew progress")
+		return selfupdate.Result{Status: "managed-unchanged", InstalledVersion: "v1.0.0", Message: "Homebrew kept lazypueue v1.0.0; its formula may lag GitHub releases."}, nil
+	}})
+	root.SetArgs([]string{"upgrade"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "/owned/brew upgrade acme/tools/custom-name [y/N]") || !strings.Contains(stderr.String(), "brew progress") || strings.Contains(out.String(), "brew progress") || !strings.Contains(out.String(), "kept lazypueue v1.0.0") {
+		t.Fatalf("wrong output: stdout=%s stderr=%s", &out, &stderr)
 	}
 }

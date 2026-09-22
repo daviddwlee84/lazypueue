@@ -5,7 +5,8 @@ Stable tags use `vMAJOR.MINOR.PATCH` and are immutable. Push the release commit 
 
 The release workflow reruns this repository's CI at the selected tag, verifies
 that the tag is an ancestor of `origin/main`, and builds with GoReleaser 2.18.2.
-It publishes only after all four archives and their SHA-256 manifest have been
+It publishes only after all four binary archives, the filtered source archive,
+and their SHA-256 manifest have been
 uploaded to a draft and downloaded again for verification.
 
 ## Artifact contract
@@ -14,7 +15,8 @@ uploaded to a draft and downloaded again for verification.
 - Archives: `lazypueue_<version-without-v>_<os>_<arch>.tar.gz`.
 - Each archive contains the flat `lazypueue` executable, `LICENSE`, and
   `completions/lazypueue.bash` / `completions/lazypueue.zsh`.
-- `checksums.txt` names exactly those four archives.
+- New tags include `lazypueue_<version-without-v>_source.tar.gz`, a rootless source archive filtered by `.gitattributes`.
+- `checksums.txt` names exactly those five archives; tags before v0.1.1 retain their four-archive contract.
 - The linker injects the Git tag into `main.version`.
 - Homebrew publication is managed centrally; this workflow does not write to a tap.
 
