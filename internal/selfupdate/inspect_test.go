@@ -90,6 +90,9 @@ func TestBuildPlatformMetadata(t *testing.T) {
 }
 
 func TestPackageManagerOwnership(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("This case exercises the Unix standalone updater/owner paths; Scoop uses its independent native handoff contract")
+	}
 	tests := []struct {
 		path    string
 		env     managerEnv

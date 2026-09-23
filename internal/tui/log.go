@@ -465,13 +465,16 @@ func (p *logPager) Run() error {
 	select {
 	case sourceErr = <-done:
 	default:
-		killed = p.source.Process.Kill() == nil
+		killed = stopPagerSource(p.source)
 		sourceErr = <-done
 	}
 	if err != nil {
 		return err
 	}
 	if sourceErr != nil {
+		if intentionallyStoppedPager(killed) {
+			return nil
+		}
 		if exit, ok := sourceErr.(*exec.ExitError); ok {
 			if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() && (status.Signal() == syscall.SIGPIPE || (killed && status.Signal() == syscall.SIGKILL)) {
 				return nil

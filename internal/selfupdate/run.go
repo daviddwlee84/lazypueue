@@ -217,7 +217,7 @@ func upgradePolicy(installation Installation, force bool) string {
 		return "this installation cannot be overwritten safely; use its package manager or reinstall lazypueue with Go"
 	}
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		return "self-upgrade currently supports macOS and Linux; reinstall lazypueue with Go on this platform"
+		return "Standalone replacement supports macOS and Linux. On Windows, use the owning Scoop package or update through the original installer."
 	}
 	if installation.BuildKind == "development" && !force {
 		return "this is a development build; use upgrade --force to replace it with the latest stable release"

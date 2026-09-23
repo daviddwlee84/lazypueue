@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -72,6 +73,9 @@ func TestBackendAllApplyRejectedBeforeHostDiscovery(t *testing.T) {
 }
 
 func TestCurrentSelfReleaseDoesNotRequireGoOrApproval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("This case exercises the Unix standalone updater/owner paths; Scoop uses its independent native handoff contract")
+	}
 	f := setup(t)
 	var out bytes.Buffer
 	applied := false

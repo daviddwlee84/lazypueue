@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -212,7 +213,7 @@ func TestCheckIsReadOnlyAndApplyRestoresOnlyOriginalRunningGroups(t *testing.T) 
 		t.Fatalf("receipt: %v %s", err, data)
 	}
 	info, _ := os.Stat(r.ReceiptPath)
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatal("receipt permissions")
 	}
 	if f.groups[1].Status != "Paused" {

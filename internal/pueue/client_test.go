@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -75,20 +76,23 @@ func TestParseV4VariantsDropsEnvironment(t *testing.T) {
 
 func TestRemoteQuotingSurvivesShell(t *testing.T) {
 	args := []string{"add", "--working-directory", "~/directory with 'quotes' $(printf OOPS)", "--", "printf '%s' \"$HOME\"; echo `printf data`\nline"}
-	cmd := exec.Command("/bin/sh", "-c", "set -- "+remoteJoin(args)+"; printf '%s\\000' \"$@\"")
+	cmd := exec.Command("sh", "-c", "set -- "+remoteJoin(args)+"; printf '%s\\000' \"$@\"")
+	cmd.Env = append(os.Environ(), "HOME=/fixture-home")
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
-	home, _ := os.UserHomeDir()
+	home := "/fixture-home"
 	want := append([]string{}, args...)
 	want[2] = home + "/directory with 'quotes' $(printf OOPS)"
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv changed:\nwant %#v\ngot %#v", want, got)
 	}
 	path := "~/bin/pueue\"$(printf OOPS)"
-	out, err := exec.Command("/bin/sh", "-c", "printf '%s' "+remotePath(path)).Output()
+	pathCommand := exec.Command("sh", "-c", "printf '%s' "+remotePath(path))
+	pathCommand.Env = append(os.Environ(), "HOME=/fixture-home")
+	out, err := pathCommand.Output()
 	if err != nil || string(out) != home+"/bin/pueue\"$(printf OOPS)" {
 		t.Fatalf("unsafe binary quoting: %q %v", out, err)
 	}
@@ -123,7 +127,7 @@ func TestNativeOverlayProfileAndRouting(t *testing.T) {
 		t.Fatalf("unneeded config copied: %s", data)
 	}
 	info, _ := os.Stat(effective)
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatal("temporary config is not private")
 	}
 	unchanged, _ := os.ReadFile(path)
@@ -135,7 +139,7 @@ func TestNativeOverlayProfileAndRouting(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		isSSH := filepath.Base(cmd.Path) == "ssh"
+		isSSH := strings.TrimSuffix(strings.ToLower(filepath.Base(cmd.Path)), ".exe") == "ssh"
 		if isSSH != submission {
 			t.Fatalf("native control routed to wrong transport: %v", cmd.Args)
 		}
@@ -153,9 +157,7 @@ func fakeClient(t *testing.T, fixture []byte, mutation string) (*Client, core.Co
 	binary := filepath.Join(dir, "pueue")
 	mutation = strings.ReplaceAll(mutation, "__STATE__", shellQuote(state))
 	script := "#!/bin/sh\nshift 4\ncase \"$1\" in\nstatus) cat " + shellQuote(state) + " ;;\n--version) printf 'pueue 4.0.2\\n' ;;\n*) printf '%s\\n' \"$@\" >> " + shellQuote(calls) + "\n" + mutation + "\n;;\nesac\n"
-	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
+	binary = writeFakeScript(t, binary, script)
 	config := filepath.Join(dir, "config.yml")
 	if err := os.WriteFile(config, []byte("{}\n"), 0600); err != nil {
 		t.Fatal(err)

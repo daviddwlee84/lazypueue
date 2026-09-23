@@ -215,6 +215,9 @@ func TestRealLinkedArchiveMetadata(t *testing.T) {
 }
 
 func TestPublishedAssetInventory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("This case exercises the Unix standalone updater/owner paths; Scoop uses its independent native handoff contract")
+	}
 	name := "lazypueue_0.1.2_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"tag_name":"v0.1.2","assets":[{"name":%q},{"name":"checksums.txt"}]}`, name)

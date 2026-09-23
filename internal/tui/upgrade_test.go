@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -165,6 +166,9 @@ func TestUpgradeNilPlansAndChangedConnectionDoNotApply(t *testing.T) {
 }
 
 func TestSelfUpdateDoesNotClaimBackendMaintenanceLease(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("This case exercises the Unix standalone updater/owner paths; Scoop uses its independent native handoff contract")
+	}
 	m, _ := fixture(t)
 	m.upgrade = &upgradeState{Applying: true, Self: &selfupdate.Plan{}}
 	if m.backendMaintenanceActive() {

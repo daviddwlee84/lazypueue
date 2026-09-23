@@ -14,6 +14,9 @@ import (
 
 func updateFixture(t *testing.T) (Installation, runOptions) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Standalone source/archive replacement is Unix-only; Windows Scoop handoff and standalone refusal have separate native coverage")
+	}
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
