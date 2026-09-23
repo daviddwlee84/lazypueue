@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/daviddwlee84/lazypueue/internal/scoopupgrade"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,4 +21,9 @@ func run() int {
 	defer backend.Close()
 	return cli.Execute(ctx, cli.Options{Backend: backend, Version: selfupdate.Version(version)}, os.Args[1:])
 }
-func main() { os.Exit(run()) }
+func main() {
+	if code, handled := scoopupgrade.HandleHelper(scoopupgrade.Product{Binary: "lazypueue", Module: "github.com/daviddwlee84/lazypueue", Main: "github.com/daviddwlee84/lazypueue"}); handled {
+		os.Exit(code)
+	}
+	os.Exit(run())
+}

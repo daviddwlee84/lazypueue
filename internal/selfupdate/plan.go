@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"runtime/debug"
 	"strings"
 
 	"github.com/daviddwlee84/lazypueue/internal/brewupgrade"
+	"github.com/daviddwlee84/lazypueue/internal/scoopupgrade"
 )
 
 // Plan binds the release or owning manager inspected before review. Its private
@@ -20,6 +22,7 @@ type Plan struct {
 	release  Release
 	checked  bool
 	brew     *brewupgrade.Plan
+	scoop    *scoopupgrade.Plan
 }
 
 type ApplyOptions struct{ Force bool }
@@ -54,6 +57,22 @@ func check(ctx context.Context, opts runOptions) (Plan, error) {
 	plan.Installation = installation
 	plan.CurrentVersion = installation.Version
 	plan.checked = true
+	exe, e := os.Executable()
+	if e != nil {
+		return plan, e
+	}
+	scoop, e := scoopupgrade.Prepare(ctx, exe, scoopupgrade.Product{Binary: "lazypueue", Module: "github.com/daviddwlee84/lazypueue", Main: "github.com/daviddwlee84/lazypueue"}, scoopupgrade.Options{})
+	if e == nil {
+		plan.scoop = &scoop
+		plan.Installation.Manager, plan.Installation.Method = "scoop", "package-manager"
+		plan.CurrentVersion, plan.CanUpgrade, plan.Status = scoop.CurrentVersion, true, "checked"
+		plan.ManagerCommand = append([]string(nil), scoop.Command...)
+		plan.Review = []string{"Owner: Scoop (" + scoop.Bucket + "/" + scoop.Package + ")", "Installed: " + scoop.CurrentVersion, "Approval exits lazypueue, then updates this exact package in a separate progress window."}
+		return plan, nil
+	}
+	if !errors.Is(e, scoopupgrade.ErrNotManaged) {
+		return plan, e
+	}
 	managed, err := checkManaged(ctx, plan, opts)
 	if err != nil || managed.Installation.Manager != "" {
 		return managed, err
@@ -93,6 +112,16 @@ func Apply(ctx context.Context, plan Plan, options ApplyOptions, progress io.Wri
 func apply(ctx context.Context, plan Plan, options ApplyOptions, progress io.Writer, opts runOptions) (Result, error) {
 	if !plan.checked {
 		return plan.Result, errors.New("check this executable before applying an update")
+	}
+	if plan.scoop != nil {
+		r, err := plan.scoop.Handoff(ctx, true)
+		result := plan.Result
+		result.Status = r.Status
+		result.OperationID = r.OperationID
+		result.ResultPath = r.ResultPath
+		result.LogPath = r.LogPath
+		result.Message = "Scoop upgrade handed off; this process must exit. Operation: " + r.OperationID + " · Result: " + r.ResultPath
+		return result, err
 	}
 	if plan.brew != nil {
 		return applyManaged(ctx, plan, progress)

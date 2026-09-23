@@ -44,6 +44,9 @@ type Release struct {
 }
 
 type Result struct {
+	OperationID           string       `json:"operation_id,omitempty"`
+	ResultPath            string       `json:"result_path,omitempty"`
+	LogPath               string       `json:"log_path,omitempty"`
 	Status                string       `json:"status"`
 	Installation          Installation `json:"installation"`
 	CurrentVersion        string       `json:"current_version"`

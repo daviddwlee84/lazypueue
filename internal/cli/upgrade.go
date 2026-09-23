@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"github.com/daviddwlee84/lazypueue/internal/scoopupgrade"
 	"io"
 	"strings"
 
@@ -80,7 +81,7 @@ func (a *app) upgradeCommand() *cobra.Command {
 		}
 		return err
 	}
-	return cmd
+	return scoopupgrade.Wrap(cmd, scoopupgrade.Product{Binary: "lazypueue", Module: "github.com/daviddwlee84/lazypueue", Main: "github.com/daviddwlee84/lazypueue"}, scoopupgrade.CommandOptions{})
 }
 func printSelfPlan(w io.Writer, p selfupdate.Plan) error {
 	for _, line := range p.Review {

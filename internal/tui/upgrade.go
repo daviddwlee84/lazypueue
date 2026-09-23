@@ -29,6 +29,7 @@ type upgradeCheckedMsg struct {
 	Err        error
 }
 type upgradeAppliedMsg struct {
+	Handoff    bool
 	Generation uint64
 	Connection string
 	Message    string
@@ -218,7 +219,7 @@ func (m *model) upgradeKey(k tea.KeyPressMsg) tea.Cmd {
 			if r.ReceiptPath != "" {
 				message += " · receipt: " + r.ReceiptPath
 			}
-			return upgradeAppliedMsg{gen, p.Connection.ID, message, e}
+			return upgradeAppliedMsg{Generation: gen, Connection: p.Connection.ID, Message: message, Err: e}
 		}
 	}
 	p := *u.Self
@@ -229,7 +230,7 @@ func (m *model) upgradeKey(k tea.KeyPressMsg) tea.Cmd {
 		if message == "" {
 			message = fmt.Sprintf("%s · %s · %s; start a new invocation to use the updated executable", r.Status, r.LatestVersion, r.Installation.ResolvedPath)
 		}
-		return upgradeAppliedMsg{Generation: gen, Message: message, Err: e}
+		return upgradeAppliedMsg{Generation: gen, Message: message, Err: e, Handoff: r.Status == "handed-off"}
 	}
 }
 func (m *model) acceptUpgradeApply(v upgradeAppliedMsg) tea.Cmd {
@@ -259,6 +260,9 @@ func (m *model) acceptUpgradeApply(v upgradeAppliedMsg) tea.Cmd {
 		message += " · " + v.Err.Error()
 	}
 	m.note(message)
+	if v.Handoff && v.Err == nil {
+		return tea.Quit
+	}
 	if strings.HasPrefix(m.overlay, "upgrade-") {
 		m.overlay = "events"
 		m.menuIndex = 0

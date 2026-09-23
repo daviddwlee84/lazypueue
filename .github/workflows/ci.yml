@@ -70,3 +70,8 @@ jobs:
         run: git show "${WORKFLOW_SHA}:scripts/release.py" > "$RUNNER_TEMP/release-publisher.py"
       - name: Verify four binaries and source payload
         run: python3 "$RUNNER_TEMP/release-publisher.py" check --project lazypueue --binary lazypueue --smoke
+
+  windows-distribution:
+    uses: ./.github/workflows/windows.yml
+    with:
+      ref: ${{ inputs.ref || github.ref }}
