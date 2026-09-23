@@ -49,6 +49,14 @@ func run(ctx context.Context, req Request, progress io.Writer, opts runOptions) 
 	result.Installation = installation
 	result.CurrentVersion = installation.Version
 	result.Status = "checked"
+	if runtime.GOOS == "windows" && installation.Manager == "" {
+		result.Status = "unsupported"
+		result.Reason = "Windows automatic upgrades require a verified Scoop owner; update this standalone copy through its original installer."
+		if req.Check {
+			return result, nil
+		}
+		return result, errors.New(result.Reason)
+	}
 	var original installationSnapshot
 	if !req.Check && installation.IdentityValid && installation.Manager == "" {
 		original, err = snapshotInstallation(installation)

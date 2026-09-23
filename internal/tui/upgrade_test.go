@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -226,5 +227,29 @@ func TestManagedSelfUpgradeUsesReviewAndCancellationWithoutBackendLease(t *testi
 				t.Fatal("lost actual manager outcome", m.status)
 			}
 		})
+	}
+}
+
+func TestScoopHandoffQuitsOnlyAfterSuccessfulApply(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		m, _ := fixture(t)
+		m.upgrade = &upgradeState{Generation: 42, Applying: true, Self: &selfupdate.Plan{}}
+		reply := upgradeAppliedMsg{Generation: 42, Handoff: true, Message: "Scoop handed off"}
+		if failure {
+			reply.Err = fmt.Errorf("helper did not start")
+		}
+		cmd := m.acceptUpgradeApply(reply)
+		if failure {
+			if cmd != nil {
+				t.Fatal("failed handoff quit the app")
+			}
+			continue
+		}
+		if cmd == nil {
+			t.Fatal("successful handoff kept installed process alive")
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Fatal("handoff did not return terminal ownership")
+		}
 	}
 }

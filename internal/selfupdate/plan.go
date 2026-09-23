@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"runtime/debug"
 	"strings"
 
@@ -50,12 +51,6 @@ func check(ctx context.Context, opts runOptions) (Plan, error) {
 	if err := ctx.Err(); err != nil {
 		return plan, err
 	}
-	installation, err := opts.inspect()
-	if err != nil {
-		return plan, err
-	}
-	plan.Installation = installation
-	plan.CurrentVersion = installation.Version
 	plan.checked = true
 	exe, e := os.Executable()
 	if e != nil {
@@ -64,7 +59,7 @@ func check(ctx context.Context, opts runOptions) (Plan, error) {
 	scoop, e := scoopupgrade.Prepare(ctx, exe, scoopupgrade.Product{Binary: "lazypueue", Module: "github.com/daviddwlee84/lazypueue", Main: "github.com/daviddwlee84/lazypueue"}, scoopupgrade.Options{})
 	if e == nil {
 		plan.scoop = &scoop
-		plan.Installation.Manager, plan.Installation.Method = "scoop", "package-manager"
+		plan.Installation = Installation{Executable: exe, ResolvedPath: scoop.CurrentPath, Version: scoop.CurrentVersion, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, BuildKind: "release", Manager: "scoop", Method: "package-manager", IdentityValid: true}
 		plan.CurrentVersion, plan.CanUpgrade, plan.Status = scoop.CurrentVersion, true, "checked"
 		plan.ManagerCommand = append([]string(nil), scoop.Command...)
 		plan.Review = []string{"Owner: Scoop (" + scoop.Bucket + "/" + scoop.Package + ")", "Installed: " + scoop.CurrentVersion, "Approval exits lazypueue, then updates this exact package in a separate progress window."}
@@ -73,9 +68,21 @@ func check(ctx context.Context, opts runOptions) (Plan, error) {
 	if !errors.Is(e, scoopupgrade.ErrNotManaged) {
 		return plan, e
 	}
+	installation, err := opts.inspect()
+	if err != nil {
+		return plan, err
+	}
+	plan.Installation = installation
+	plan.CurrentVersion = installation.Version
 	managed, err := checkManaged(ctx, plan, opts)
 	if err != nil || managed.Installation.Manager != "" {
 		return managed, err
+	}
+	if runtime.GOOS == "windows" && installation.Manager == "" {
+		plan.Status = "unsupported"
+		plan.Reason = "Windows automatic upgrades require a verified Scoop owner; update this standalone copy through its original installer."
+		plan.Review = []string{plan.Reason}
+		return plan, nil
 	}
 	if installation.IdentityValid && installation.Manager == "" {
 		plan.original, err = snapshotInstallation(installation)
