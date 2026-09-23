@@ -5,20 +5,27 @@ Stable tags use `vMAJOR.MINOR.PATCH` and are immutable. Push the release commit 
 
 The release workflow reruns this repository's CI at the selected tag, verifies
 that the tag is an ancestor of `origin/main`, and builds with GoReleaser 2.18.2.
-It publishes only after all four binary archives, the filtered source archive,
-and their SHA-256 manifest have been
-uploaded to a draft and downloaded again for verification.
+It publishes only after the version-specific archive inventory and SHA-256
+manifest have been uploaded to a draft and downloaded again for verification.
 
 ## Artifact contract
 
-- Targets: Darwin/Linux, amd64/arm64, with `CGO_ENABLED=0`.
-- Archives: `lazypueue_<version-without-v>_<os>_<arch>.tar.gz`.
-- Each archive contains the flat `lazypueue` executable, `LICENSE`, and
-  `completions/lazypueue.bash` / `completions/lazypueue.zsh`.
-- New tags include `lazypueue_<version-without-v>_source.tar.gz`, a rootless source archive filtered by `.gitattributes`.
-- `checksums.txt` names exactly those five archives; tags before v0.1.1 retain their four-archive contract.
-- The linker injects the Git tag into `main.version`.
-- Homebrew publication is managed centrally; this workflow does not write to a tap.
+- Starting at v0.2.0: Darwin/Linux/Windows, amd64/arm64, with `CGO_ENABLED=0`.
+- Darwin/Linux archives: `lazypueue_<version-without-v>_<os>_<arch>.tar.gz`.
+- Windows archives: `lazypueue_<version-without-v>_windows_<arch>.zip`.
+- Each archive contains the flat `lazypueue` executable (`lazypueue.exe` on Windows),
+  `LICENSE`, and Bash, Zsh and PowerShell files under `completions/`.
+- `lazypueue_<version-without-v>_source.tar.gz` is filtered by `.gitattributes`.
+- New releases have six binary archives, one source archive and `checksums.txt`:
+  eight assets; the checksum manifest names all seven archives.
+- Historical tags keep the version-bound inventory in `scripts/release.py`.
+  Do not add Windows files to an existing release or replace immutable assets.
+- Linker metadata carries the exact stable tag; verification checks product,
+  version, architecture, PE/ELF/Mach-O headers and safe archive membership.
+- Homebrew and Scoop publication is owned by their central repositories. The
+  product release workflow does not write package manifests directly.
+- Required Windows CI runs native Go tests and real isolated Scoop check,
+  process-exit handoff, update, no-op, running-instance and checksum-failure cases.
 
 ## Verify without publishing
 

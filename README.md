@@ -4,9 +4,41 @@ A Go terminal dashboard for [Pueue](https://github.com/Nukesor/pueue): see queue
 
 The interaction follows [Pueue Raycast Extension](https://github.com/daviddwlee84/Pueue-Raycast-Extension), with a compact overview inspired by btop and keyboard navigation like the other lazy tools. It uses the installed Pueue CLI and your existing daemons.
 
+## Windows installation and upgrades
+
+```powershell
+scoop bucket add daviddwlee84 https://github.com/daviddwlee84/scoop-bucket
+scoop install daviddwlee84/lazypueue
+lazypueue upgrade --check --json
+lazypueue upgrade --yes
+```
+
+Windows v0.2.0+ releases include amd64/arm64 ZIPs and PowerShell completion.
+Scoop owns the installed executable. Upgrade verifies its receipt, current
+junction, product identity and manager, then starts a private helper outside the
+package and exits so Scoop can replace the executable. Interactive use opens a
+progress window. A `handed-off` result confirms acceptance; only the later
+`updated` or `up-to-date` result confirms successful completion.
+
+For automation, add `--json` and run the returned `status_command` to poll the
+private helper. Do not poll the installed executable during the update, because
+Scoop refuses to update a running package. Once finished,
+`lazypueue upgrade --status <operation-id> --json` reads the saved result.
+If the launching host retains process lifetime control, keep that terminal open
+until the final result. Interrupted, canceled, blocked and failed operations
+retain their status and log paths; none claims successful rollback or falls
+back to another installer. Close other instances before retrying.
+
+`--check` is read-only and does not refresh buckets or promise a remote latest
+version. Successful completion reports the version actually installed. Manually
+extracted Windows ZIPs need manual replacement while closed; package ownership and Windows process guards cannot be overridden. Installing the CLI does not
+configure its backends, services or credentials.
+
+A Scoop upgrade initiated from the TUI exits the dashboard after handoff.
+
 ## Prebuilt releases
 
-Download the archive for your macOS/Linux amd64/arm64 platform from
+Download the archive for your macOS/Linux/Windows amd64/arm64 platform from
 [GitHub Releases](https://github.com/daviddwlee84/lazypueue/releases).
 Verify it against `checksums.txt` before extracting. Archives contain the
 `lazypueue` executable, MIT license, and Bash/Zsh completions. Go is only needed
